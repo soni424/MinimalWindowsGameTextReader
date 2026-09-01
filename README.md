@@ -89,6 +89,12 @@ Windows OCR, its event loop, SAPI voice tokens/player, and WinRT synthesizer/med
 
 Settings persist in `config.json` next to the application.
 
+## Troubleshooting audio bursts
+
+On some Realtek/DTS audio devices, rapidly starting another reading can produce a short `brrrt` or distorted burst even though the generated speech and a Stereo Mix/Audacity recording sound clean. This points to the Windows output-device processing path rather than damaged OCR or speech audio.
+
+On Windows 11, open **Quick Settings → Sound output**, select the affected playback device, and change **Spatial sound** from **Off** to **Windows Sonic for Headphones**. Windows Sonic has been confirmed to remove these bursts on an affected Realtek device by using a more stable Windows audio-processing path. If the problem remains, also try disabling other DTS/Realtek audio enhancements or testing a different output device.
+
 ## Build the Windows app
 
 Install the project requirements and PyInstaller in a virtual environment, then build from the repository folder:
