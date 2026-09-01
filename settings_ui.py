@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from queue import Empty, SimpleQueue
-from tkinter import messagebox, scrolledtext, simpledialog, ttk
+from tkinter import scrolledtext, ttk
 from typing import Callable
 
 from appearance import ThemePalette, apply_windows_title_bar, resolve_theme
@@ -16,16 +16,205 @@ from tts_engine import TtsEngine, Voice
 from window_state import WindowStateController
 
 
+def _theme_dialog_window(window: tk.Toplevel, palette: ThemePalette) -> None:
+    """Theme a child window's body now and its native frame after mapping."""
+    window.configure(bg=palette.window)
+
+    def apply_frame(_event: object | None = None) -> None:
+        apply_windows_title_bar(window, palette.dark)
+
+    window.bind("<Map>", apply_frame, add="+")
+    window.after_idle(apply_frame)
+
+
+def _center_dialog(window: tk.Toplevel, parent: tk.Misc) -> None:
+    window.update_idletasks()
+    width = window.winfo_reqwidth()
+    height = window.winfo_reqheight()
+    try:
+        parent.update_idletasks()
+        x = parent.winfo_rootx() + max(0, (parent.winfo_width() - width) // 2)
+        y = parent.winfo_rooty() + max(0, (parent.winfo_height() - height) // 2)
+        window.geometry(f"+{x}+{y}")
+    except tk.TclError:
+        pass
+
+
+def _show_modal(window: tk.Toplevel, parent: tk.Misc, focus: tk.Misc | None = None) -> None:
+    """Reveal a fully styled modal only after its size and native handle exist."""
+    try:
+        previous_grab = parent.grab_current()
+    except tk.TclError:
+        previous_grab = None
+    _center_dialog(window, parent)
+    window.deiconify()
+    window.update_idletasks()
+    try:
+        window.grab_set()
+    except tk.TclError:
+        pass
+    if focus is not None:
+        focus.focus_set()
+    window.wait_window()
+    if previous_grab is not None:
+        try:
+            if previous_grab.winfo_exists():
+                previous_grab.grab_set()
+        except tk.TclError:
+            pass
+
+
+class _ThemedTextPrompt:
+    """Palette-aware replacement for ``simpledialog.askstring``."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        palette: ThemePalette,
+        title: str,
+        prompt: str,
+        initial_value: str = "",
+    ) -> None:
+        self.parent = parent
+        self.result: str | None = None
+        self.window = tk.Toplevel(parent)
+        self.window.withdraw()
+        self.window.title(title)
+        self.window.transient(parent)
+        self.window.resizable(False, False)
+        _theme_dialog_window(self.window, palette)
+
+        self.value = tk.StringVar(master=self.window, value=initial_value)
+        body = ttk.Frame(self.window, style="Card.TFrame", padding=(22, 18))
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        ttk.Label(body, text=prompt, style="CardText.TLabel").grid(row=0, column=0, sticky="w")
+        self.entry = ttk.Entry(body, textvariable=self.value, width=38)
+        self.entry.grid(row=1, column=0, sticky="ew", pady=(8, 16))
+
+        actions = ttk.Frame(body, style="CardInner.TFrame")
+        actions.grid(row=2, column=0, sticky="e")
+        self.cancel_button = ttk.Button(actions, text="Cancel", command=self._cancel)
+        self.cancel_button.pack(side="left")
+        self.ok_button = ttk.Button(actions, text="OK", style="Primary.TButton", command=self._accept)
+        self.ok_button.pack(side="left", padx=(8, 0))
+
+        self.window.bind("<Return>", self._accept)
+        self.window.bind("<Escape>", self._cancel)
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+
+    def _accept(self, _event: object | None = None) -> str:
+        self.result = self.value.get()
+        self.window.destroy()
+        return "break"
+
+    def _cancel(self, _event: object | None = None) -> str:
+        self.result = None
+        self.window.destroy()
+        return "break"
+
+    def show(self) -> str | None:
+        self.entry.selection_range(0, "end")
+        _show_modal(self.window, self.parent, self.entry)
+        return self.result
+
+
+class _ThemedConfirmDialog:
+    """Small app-themed yes/no dialog for destructive confirmations."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        palette: ThemePalette,
+        title: str,
+        message: str,
+        confirm_text: str = "OK",
+    ) -> None:
+        self.parent = parent
+        self.result = False
+        self.window = tk.Toplevel(parent)
+        self.window.withdraw()
+        self.window.title(title)
+        self.window.transient(parent)
+        self.window.resizable(False, False)
+        _theme_dialog_window(self.window, palette)
+
+        body = ttk.Frame(self.window, style="Card.TFrame", padding=(22, 18))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=message, style="CardText.TLabel", wraplength=380, justify="left").pack(anchor="w")
+        actions = ttk.Frame(body, style="CardInner.TFrame")
+        actions.pack(anchor="e", pady=(18, 0))
+        self.cancel_button = ttk.Button(actions, text="Cancel", command=self._cancel)
+        self.cancel_button.pack(side="left")
+        self.confirm_button = ttk.Button(
+            actions,
+            text=confirm_text,
+            style="Danger.TButton",
+            command=self._confirm,
+        )
+        self.confirm_button.pack(side="left", padx=(8, 0))
+        self.window.bind("<Return>", self._confirm)
+        self.window.bind("<Escape>", self._cancel)
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+
+    def _confirm(self, _event: object | None = None) -> str:
+        self.result = True
+        self.window.destroy()
+        return "break"
+
+    def _cancel(self, _event: object | None = None) -> str:
+        self.result = False
+        self.window.destroy()
+        return "break"
+
+    def show(self) -> bool:
+        _show_modal(self.window, self.parent, self.cancel_button)
+        return self.result
+
+
+class _ThemedAlertDialog:
+    """App-themed replacement for the small native error message boxes."""
+
+    def __init__(self, parent: tk.Misc, palette: ThemePalette, title: str, message: str) -> None:
+        self.parent = parent
+        self.window = tk.Toplevel(parent)
+        self.window.withdraw()
+        self.window.title(title)
+        self.window.transient(parent)
+        self.window.resizable(False, False)
+        _theme_dialog_window(self.window, palette)
+
+        body = ttk.Frame(self.window, style="Card.TFrame", padding=(22, 18))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=message, style="CardText.TLabel", wraplength=420, justify="left").pack(anchor="w")
+        self.ok_button = ttk.Button(body, text="OK", style="Primary.TButton", command=self.window.destroy)
+        self.ok_button.pack(anchor="e", pady=(18, 0))
+        self.window.bind("<Return>", lambda _event: self.window.destroy())
+        self.window.bind("<Escape>", lambda _event: self.window.destroy())
+        self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
+
+    def show(self) -> None:
+        _show_modal(self.window, self.parent, self.ok_button)
+
+
 class _ReplacementDialog:
     """Small modal editor for one literal OCR replacement rule."""
 
-    def __init__(self, parent: tk.Misc, initial: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        palette: ThemePalette,
+        initial: dict[str, object] | None = None,
+    ) -> None:
         initial = initial or {}
+        self.palette = palette
         self.result: dict[str, object] | None = None
         self.window = tk.Toplevel(parent)
+        self.window.withdraw()
         self.window.title("Replacement rule")
         self.window.transient(parent)
         self.window.resizable(False, False)
+        _theme_dialog_window(self.window, palette)
         self.original = tk.StringVar(value=str(initial.get("original", "")))
         self.replacement = tk.StringVar(value=str(initial.get("replacement", "")))
         self.enabled = tk.BooleanVar(value=initial.get("enabled", True) is True)
@@ -52,14 +241,17 @@ class _ReplacementDialog:
         self.window.bind("<Escape>", lambda _event: self.window.destroy())
         self.window.bind("<Return>", lambda _event: self._save())
         self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
-        original_entry.focus_set()
-        self.window.grab_set()
-        self.window.wait_window()
+        _show_modal(self.window, parent, original_entry)
 
     def _save(self) -> None:
         original = self.original.get().strip()
         if not original:
-            messagebox.showerror("Missing original text", "Enter the text OCR should match.", parent=self.window)
+            _ThemedAlertDialog(
+                self.window,
+                self.palette,
+                "Missing original text",
+                "Enter the text OCR should match.",
+            ).show()
             return
         self.result = {
             "original": original,
@@ -87,13 +279,15 @@ class _ShortcutRecorderDialog:
         "Left": "Left", "Right": "Right",
     }
 
-    def __init__(self, parent: tk.Misc, title: str) -> None:
+    def __init__(self, parent: tk.Misc, palette: ThemePalette, title: str) -> None:
         self.result: str | None = None
         self._pressed_modifiers: set[str] = set()
         self.window = tk.Toplevel(parent)
+        self.window.withdraw()
         self.window.title(f"Record {title}")
         self.window.transient(parent)
         self.window.resizable(False, False)
+        _theme_dialog_window(self.window, palette)
         frame = ttk.Frame(self.window, padding=(24, 22))
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="Press your shortcut now", font=("Segoe UI", 14, "bold")).pack()
@@ -103,9 +297,7 @@ class _ShortcutRecorderDialog:
         ttk.Button(frame, text="Cancel", command=self.window.destroy).pack(pady=(18, 0))
         self.window.bind("<KeyPress>", self._key_pressed)
         self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
-        self.window.grab_set()
-        self.window.focus_force()
-        self.window.wait_window()
+        _show_modal(self.window, parent, self.window)
 
     def _key_pressed(self, event: tk.Event) -> str:
         keysym = str(event.keysym)
@@ -288,6 +480,20 @@ class SettingsUI:
             "Primary.TButton",
             background=[("pressed", palette.accent_pressed), ("active", palette.accent_hover)],
             foreground=[("disabled", "#d7e2f2")],
+        )
+        style.configure(
+            "Danger.TButton",
+            background=palette.danger_soft,
+            foreground=palette.danger,
+            bordercolor=palette.danger,
+            lightcolor=palette.danger_soft,
+            darkcolor=palette.danger_soft,
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "Danger.TButton",
+            background=[("pressed", palette.danger), ("active", palette.danger)],
+            foreground=[("pressed", "#ffffff"), ("active", "#ffffff")],
         )
         style.configure("Compact.TButton", padding=(8, 5), font=("Segoe UI", 9))
 
@@ -679,7 +885,7 @@ class SettingsUI:
             self.replacement_tree.selection_set(str(select_index))
 
     def add_replacement(self) -> None:
-        dialog = _ReplacementDialog(self.root)
+        dialog = _ReplacementDialog(self.root, self._palette)
         if dialog.result is None:
             return
         self._replacement_rules.append(dialog.result)
@@ -690,7 +896,7 @@ class SettingsUI:
         index = self._selected_replacement_index()
         if index is None:
             return
-        dialog = _ReplacementDialog(self.root, self._replacement_rules[index])
+        dialog = _ReplacementDialog(self.root, self._palette, self._replacement_rules[index])
         if dialog.result is None:
             return
         self._replacement_rules[index] = dialog.result
@@ -723,7 +929,12 @@ class SettingsUI:
             self.protected_list.insert("end", term)
 
     def add_protected_word(self) -> None:
-        term = simpledialog.askstring("Protect a game term", "Name, phrase, item, or lore term:", parent=self.root)
+        term = _ThemedTextPrompt(
+            self.root,
+            self._palette,
+            "Protect a game term",
+            "Name, phrase, item, or lore term:",
+        ).show()
         if term is None or not term.strip():
             return
         if term.strip().casefold() in {item.casefold() for item in self._protected_words}:
@@ -855,14 +1066,14 @@ class SettingsUI:
             self.on_apply_hotkeys(self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get())
         except Exception as exc:
             self.set_status(str(exc), error=True)
-            messagebox.showerror("Could not apply shortcuts", str(exc), parent=self.root)
+            _ThemedAlertDialog(self.root, self._palette, "Could not apply shortcuts", str(exc)).show()
 
     def record_shortcut(self, target: tk.StringVar, title: str) -> None:
         """Open the chord recorder and place the captured value in its field."""
         self.on_shortcut_recording(True)
         dialog: _ShortcutRecorderDialog | None = None
         try:
-            dialog = _ShortcutRecorderDialog(self.root, title)
+            dialog = _ShortcutRecorderDialog(self.root, self._palette, title)
         finally:
             self.on_shortcut_recording(False)
         if dialog is not None and dialog.result is not None:
@@ -903,41 +1114,58 @@ class SettingsUI:
             self.on_profile_select(profile_id)
 
     def create_profile(self) -> None:
-        name = simpledialog.askstring("New capture profile", "Profile name:", parent=self.root)
+        name = _ThemedTextPrompt(
+            self.root,
+            self._palette,
+            "New capture profile",
+            "Profile name:",
+        ).show()
         if name is None:
             return
         try:
             self.on_profile_create(name)
         except Exception as exc:
             self.set_status(str(exc), error=True)
-            messagebox.showerror("Could not create profile", str(exc), parent=self.root)
+            _ThemedAlertDialog(self.root, self._palette, "Could not create profile", str(exc)).show()
 
     def rename_profile(self) -> None:
         profile_id = self._selected_profile_id()
         if not profile_id:
             return
         current = self.profile_value.get()
-        name = simpledialog.askstring("Rename capture profile", "Profile name:", initialvalue=current, parent=self.root)
+        name = _ThemedTextPrompt(
+            self.root,
+            self._palette,
+            "Rename capture profile",
+            "Profile name:",
+            initial_value=current,
+        ).show()
         if name is None:
             return
         try:
             self.on_profile_rename(profile_id, name)
         except Exception as exc:
             self.set_status(str(exc), error=True)
-            messagebox.showerror("Could not rename profile", str(exc), parent=self.root)
+            _ThemedAlertDialog(self.root, self._palette, "Could not rename profile", str(exc)).show()
 
     def delete_profile(self) -> None:
         profile_id = self._selected_profile_id()
         if not profile_id:
             return
         name = self.profile_value.get()
-        if not messagebox.askyesno("Delete capture profile", f'Delete "{name}"?', parent=self.root):
+        if not _ThemedConfirmDialog(
+            self.root,
+            self._palette,
+            "Delete capture profile",
+            f'Delete "{name}"?',
+            confirm_text="Delete",
+        ).show():
             return
         try:
             self.on_profile_delete(profile_id)
         except Exception as exc:
             self.set_status(str(exc), error=True)
-            messagebox.showerror("Could not delete profile", str(exc), parent=self.root)
+            _ThemedAlertDialog(self.root, self._palette, "Could not delete profile", str(exc)).show()
 
     def set_box(self, box: list[int] | None) -> None:
         """Update the fixed-box summary shown in the Reader tab."""
@@ -980,6 +1208,7 @@ class SettingsUI:
         window.geometry("760x620")
         window.minsize(580, 440)
         window.transient(self.root)
+        _theme_dialog_window(window, self._palette)
         frame = ttk.Frame(window, padding=16)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)

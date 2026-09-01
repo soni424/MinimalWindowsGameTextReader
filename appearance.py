@@ -115,7 +115,11 @@ def apply_windows_title_bar(root: object, dark: bool) -> bool:
     try:
         root.update_idletasks()
         user32 = ctypes.windll.user32
-        hwnd = int(user32.GetParent(root.winfo_id()))
+        # GA_ROOT resolves Tk's client HWND to the real top-level frame without
+        # walking through a transient dialog's owner window.
+        hwnd = int(user32.GetAncestor(root.winfo_id(), 2))
+        if not hwnd:
+            hwnd = int(user32.GetParent(root.winfo_id()))
         if not hwnd:
             hwnd = int(root.winfo_id())
         if not hwnd:

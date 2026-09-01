@@ -9,19 +9,22 @@ from __future__ import annotations
 import threading
 import unittest
 import ctypes
+import inspect
 from pathlib import Path
 from queue import SimpleQueue
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw, ImageFont
 
+import settings_ui as settings_ui_module
 from app_resources import (
     APP_ICON_ICO_PATH,
     APP_ICON_MASTER_PATH,
     APP_ICON_WINDOW_PATH,
     apply_window_icon,
 )
-from appearance import apply_windows_title_bar
+from appearance import DARK, LIGHT, apply_windows_title_bar
 from config import ConfigStore, validate_config
 from hotkey_manager import HotkeyError, HotkeyManager, normalise_hotkey, to_pynput_hotkey
 from main import GameTextReaderApplication
@@ -66,6 +69,103 @@ class WindowsComponentTests(unittest.TestCase):
             self.assertIsNotNone(getattr(root, "_game_text_reader_icon", None))
         finally:
             root.destroy()
+
+    def test_profile_dialogs_use_the_current_theme_instead_of_native_prompts(self) -> None:
+        self.assertTrue(hasattr(settings_ui_module, "_ThemedTextPrompt"))
+        self.assertTrue(hasattr(settings_ui_module, "_ThemedConfirmDialog"))
+        self.assertNotIn("simpledialog.askstring", inspect.getsource(SettingsUI.create_profile))
+        self.assertNotIn("simpledialog.askstring", inspect.getsource(SettingsUI.rename_profile))
+        self.assertNotIn("messagebox.askyesno", inspect.getsource(SettingsUI.delete_profile))
+
+    def test_profile_prompt_body_controls_and_title_bar_follow_each_palette(self) -> None:
+        import tkinter as tk
+        from tkinter import ttk
+
+        root = tk.Tk()
+        root.withdraw()
+        ui = SettingsUI.__new__(SettingsUI)
+        ui.root = root
+        ui.style = ttk.Style(root)
+        try:
+            ui.style.theme_use("clam")
+            for palette in (DARK, LIGHT):
+                ui._configure_styles(palette)
+                with patch("settings_ui.apply_windows_title_bar", return_value=True) as apply_title_bar:
+                    dialog = settings_ui_module._ThemedTextPrompt(
+                        root,
+                        palette,
+                        "New capture profile",
+                        "Profile name:",
+                    )
+                    dialog.window.deiconify()
+                    root.update()
+                    self.assertEqual(dialog.window.cget("background"), palette.window)
+                    self.assertEqual(ui.style.lookup("Card.TFrame", "background"), palette.card)
+                    self.assertEqual(ui.style.lookup("CardText.TLabel", "foreground"), palette.text)
+                    self.assertEqual(ui.style.lookup("TEntry", "fieldbackground"), palette.input)
+                    self.assertEqual(ui.style.lookup("TEntry", "foreground"), palette.text)
+                    self.assertEqual(ui.style.lookup("Primary.TButton", "background"), palette.accent)
+                    self.assertTrue(dialog.window.bind("<Return>"))
+                    self.assertTrue(dialog.window.bind("<Escape>"))
+                    self.assertTrue(apply_title_bar.called)
+                    self.assertEqual(apply_title_bar.call_args.args[1], palette.dark)
+                    dialog._cancel()
+        finally:
+            root.destroy()
+
+    def test_profile_prompt_uses_the_latest_runtime_palette_and_preserves_actions(self) -> None:
+        created: list[str] = []
+        captured_palettes: list[object] = []
+        prompt_results = iter(("Dark profile", None, "Light profile"))
+
+        class Prompt:
+            def __init__(self, _root: object, palette: object, *_args: object, **_kwargs: object) -> None:
+                captured_palettes.append(palette)
+
+            @staticmethod
+            def show() -> str | None:
+                return next(prompt_results)
+
+        ui = SettingsUI.__new__(SettingsUI)
+        ui.root = object()
+        ui._palette = DARK
+        ui.on_profile_create = created.append
+        ui.set_status = lambda *_args, **_kwargs: None
+        with patch("settings_ui._ThemedTextPrompt", Prompt):
+            ui.create_profile()
+            ui.create_profile()
+            ui._palette = LIGHT
+            ui.create_profile()
+
+        self.assertEqual(created, ["Dark profile", "Light profile"])
+        self.assertEqual(captured_palettes, [DARK, DARK, LIGHT])
+
+    def test_profile_delete_confirmation_keeps_cancel_and_confirm_behaviour(self) -> None:
+        deleted: list[str] = []
+
+        class Confirmation:
+            result = False
+
+            def __init__(self, _root: object, palette: object, *_args: object, **_kwargs: object) -> None:
+                self.palette = palette
+
+            def show(self) -> bool:
+                return self.result
+
+        ui = SettingsUI.__new__(SettingsUI)
+        ui.root = object()
+        ui._palette = DARK
+        ui._profile_id_by_name = {"Default": "default"}
+        ui.profile_value = SimpleNamespace(get=lambda: "Default")
+        ui.on_profile_delete = deleted.append
+        ui.set_status = lambda *_args, **_kwargs: None
+        with patch("settings_ui._ThemedConfirmDialog", Confirmation):
+            ui.delete_profile()
+            self.assertEqual(deleted, [])
+            Confirmation.result = True
+            ui.delete_profile()
+
+        self.assertEqual(deleted, ["default"])
 
     def test_fixed_hotkey_uses_the_saved_box_without_showing_settings(self) -> None:
         class Root:
