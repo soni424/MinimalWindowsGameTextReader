@@ -11,6 +11,7 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 - Conservatively corrects common game-font OCR mistakes while protecting fictional terminology.
 - Supports custom replacements and protected game-specific words.
 - Provides configurable system-wide keyboard shortcuts.
+- Supports rapid dialogue reading with immediate replacement or one queued next line.
 - Stores multiple capture profiles and remaps their regions after display changes.
 - Includes System, Dark, and Light appearances throughout the main interface, dialogs, and drop-down controls.
 - Runs quietly from the Windows system tray.
@@ -75,9 +76,10 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 - The **Voice & shortcuts** tab contains speech controls and global shortcut setup.
 - **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
 - Speed and volume changes are saved automatically, including changes made with the sliders.
+- **New capture while speaking** defaults to replacing the current line immediately, which avoids Windows SAPI handoff delays. Queue mode is available when you want the current line to finish before the next line.
 - Window size, position, and normal/maximized state are restored. Capture and speech operations never write transient minimized geometry over that preference.
 
-Global shortcut reads minimize settings without hiding them to the tray. One persistent OCR worker replaces pending jobs, stops older speech immediately, and publishes only the newest result.
+Global shortcut reads minimize settings without hiding them to the tray. One persistent OCR worker replaces obsolete pending jobs and publishes only the newest result. Speech uses one active line plus one bounded next-line slot, so a new capture can be prepared while the current line is still being spoken; replace mode can hand off to it immediately when the OCR result arrives.
 
 Choose **Record** beside Read Fixed Box, Select a Snippet, or the optional Read Again shortcut, then press any supported Windows combination such as `Ctrl+Shift+T`, `Alt+Q`, `Shift+F8`, or `Ctrl+Shift+Space`. Shortcuts can be cleared individually. Windows registration detects conflicts with this app and other programs before a setting is saved; `F12` is rejected because Windows reserves it.
 

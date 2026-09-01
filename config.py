@@ -24,6 +24,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "voice": "",
     "rate": 0,
     "volume": 100,
+    "speech": {
+        "capture_mode": "replace",
+    },
     "fixed_box": None,
     "window": {
         "width": 980,
@@ -278,6 +281,11 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = raw if isinstance(raw, Mapping) else {}
     raw_hotkeys = raw.get("hotkeys") if isinstance(raw.get("hotkeys"), Mapping) else {}
     raw_ocr = raw.get("ocr") if isinstance(raw.get("ocr"), Mapping) else {}
+    raw_speech = raw.get("speech") if isinstance(raw.get("speech"), Mapping) else {}
+    capture_mode = raw_speech.get("capture_mode", DEFAULT_CONFIG["speech"]["capture_mode"])
+    capture_mode = capture_mode.strip().lower() if isinstance(capture_mode, str) else DEFAULT_CONFIG["speech"]["capture_mode"]
+    if capture_mode not in {"queue", "replace"}:
+        capture_mode = DEFAULT_CONFIG["speech"]["capture_mode"]
     strength = raw_ocr.get("strength", DEFAULT_CONFIG["ocr"]["strength"])
     strength = strength.strip().lower() if isinstance(strength, str) else DEFAULT_CONFIG["ocr"]["strength"]
     if strength not in {"conservative", "balanced", "strong"}:
@@ -296,6 +304,9 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "voice": _nonempty_string(raw.get("voice"), DEFAULT_CONFIG["voice"], 1024),
         "rate": _clamp_int(raw.get("rate"), -10, 10, DEFAULT_CONFIG["rate"]),
         "volume": _clamp_int(raw.get("volume"), 0, 100, DEFAULT_CONFIG["volume"]),
+        "speech": {
+            "capture_mode": capture_mode,
+        },
         # Keep the legacy key as a compatibility mirror while profiles remain
         # the authoritative capture-area model.
         "fixed_box": compatible_box,
@@ -370,7 +381,7 @@ class ConfigStore:
         with self._lock:
             updated = self.get()
             for key, value in changes.items():
-                if key in {"hotkeys", "ocr"} and isinstance(value, Mapping):
+                if key in {"hotkeys", "ocr", "speech"} and isinstance(value, Mapping):
                     updated[key].update(value)
                 else:
                     updated[key] = value

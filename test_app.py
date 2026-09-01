@@ -538,6 +538,10 @@ class WindowsComponentTests(unittest.TestCase):
             ui._theme_changed()
             root.update()
             self.assertEqual(store.get()["theme"], "dark")
+            self.assertEqual(ui.capture_speech_value.get(), "Replace current line")
+            ui.capture_speech_value.set("Queue next line")
+            ui._save_capture_speech_settings()
+            self.assertEqual(store.get()["speech"]["capture_mode"], "queue")
         finally:
             root.destroy()
             path.unlink(missing_ok=True)

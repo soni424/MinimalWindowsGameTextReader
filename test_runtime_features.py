@@ -14,7 +14,7 @@ from capture_profiles import (
     build_capture_area,
     resolve_capture_area,
 )
-from capture_pipeline import CaptureWorker
+from capture_pipeline import CaptureJob, CaptureWorker, PipelineTimings
 from config import ConfigStore, validate_config
 from main import GameTextReaderApplication
 from ocr_correction import CorrectionResult
@@ -58,9 +58,20 @@ class ConfigurationMigrationTests(unittest.TestCase):
 
         self.assertEqual(settings["theme"], "dark")
         self.assertEqual(settings["rate"], 4)
+        self.assertEqual(settings["speech"]["capture_mode"], "replace")
         self.assertEqual(
             settings["window"],
             {"width": 1110, "height": 870, "x": -1320, "y": 45, "state": "maximized"},
+        )
+
+    def test_rapid_capture_mode_is_validated_and_persisted(self) -> None:
+        self.assertEqual(
+            validate_config({"speech": {"capture_mode": "replace"}})["speech"],
+            {"capture_mode": "replace"},
+        )
+        self.assertEqual(
+            validate_config({"speech": {"capture_mode": "unknown"}})["speech"],
+            {"capture_mode": "replace"},
         )
 
 
@@ -292,6 +303,16 @@ class ReaderStateTests(unittest.TestCase):
         state.end_speech("In a second.")
         self.assertEqual(state.currently_spoken_text, "")
 
+    def test_old_speech_completion_cannot_clear_newer_identical_text(self) -> None:
+        state = ReaderTextState()
+        state.begin_speech("Same line", request_id=1)
+        state.begin_speech("Same line", request_id=2)
+        state.end_speech("Same line", request_id=1)
+        self.assertEqual(state.currently_spoken_text, "Same line")
+        self.assertEqual(state.currently_spoken_request_id, 2)
+        state.end_speech("Same line", request_id=2)
+        self.assertEqual(state.currently_spoken_text, "")
+
     def test_read_again_uses_stored_final_text_without_capture_or_ocr(self) -> None:
         class Tts:
             def __init__(self) -> None:
@@ -331,7 +352,190 @@ class ReaderStateTests(unittest.TestCase):
         self.assertEqual(app.tts.spoken, [("Final corrected dialogue", "voice", 2, 88)])
 
 
+class ApplicationSpeechRoutingTests(unittest.TestCase):
+    def _make_app(self, mode: str) -> tuple[GameTextReaderApplication, list[tuple[str, str, int, int]]]:
+        calls: list[tuple[str, str, int, int]] = []
+
+        class Config:
+            @staticmethod
+            def get() -> dict[str, object]:
+                return {
+                    "voice": "voice",
+                    "rate": 2,
+                    "volume": 88,
+                    "speech": {"capture_mode": mode},
+                }
+
+        class Tts:
+            def enqueue(self, text: str, voice: str, rate: int, volume: int) -> None:
+                calls.append(("queue", text, rate, volume))
+
+            def replace(self, text: str, voice: str, rate: int, volume: int) -> None:
+                calls.append(("replace", text, rate, volume))
+
+            def stop(self) -> None:
+                raise AssertionError("a normal capture must not stop current speech")
+
+        class Ui:
+            def set_last_result(self, _result: object) -> None:
+                pass
+
+            def set_read_again_enabled(self, _enabled: bool) -> None:
+                pass
+
+            def set_status(self, _message: str, error: bool = False) -> None:
+                pass
+
+        app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+        app.config = Config()
+        app.tts = Tts()
+        app.ui = Ui()
+        app.text_state = ReaderTextState()
+        app._timing_lock = threading.Lock()
+        app._pending_speech_timing = None
+        app._schedule = lambda callback: callback()
+        return app, calls
+
+    def test_capture_result_queues_the_next_line_without_stopping_audio(self) -> None:
+        app, calls = self._make_app("queue")
+        job = CaptureJob(1, (0, 0, 10, 10), "Fixed box", app.config.get(), time.perf_counter())
+        app._capture_succeeded(
+            job,
+            CorrectionResult("First", "First", (), 0.0),
+            PipelineTimings(time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter()),
+        )
+        self.assertEqual(calls, [("queue", "First", 2, 88)])
+
+    def test_capture_result_can_replace_the_current_line_without_stopping_audio(self) -> None:
+        app, calls = self._make_app("replace")
+        job = CaptureJob(1, (0, 0, 10, 10), "Fixed box", app.config.get(), time.perf_counter())
+        app._capture_succeeded(
+            job,
+            CorrectionResult("Next", "Next", (), 0.0),
+            PipelineTimings(time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter()),
+        )
+        self.assertEqual(calls, [("replace", "Next", 2, 88)])
+
+
 class SpeechResourceTests(unittest.TestCase):
+    def test_replacement_starts_without_waiting_for_backend_cleanup(self) -> None:
+        started: list[str] = []
+        first_started = threading.Event()
+        second_started = threading.Event()
+
+        class Session:
+            def __init__(self) -> None:
+                self.active: object | None = None
+                self.replaced = False
+                self.release_legacy = threading.Event()
+
+            def prepare(self, _voice_id: str) -> None:
+                pass
+
+            def start(self, request: object, on_started: object, replace: bool = False) -> None:
+                self.active = request
+                self.replaced = self.replaced or replace
+                on_started()  # type: ignore[operator]
+
+            def play(self, request: object, on_started: object) -> None:
+                # Compatibility path used by the current blocking engine. The
+                # first request remains stuck in backend cleanup until stopped.
+                self.start(request, on_started)
+                self.release_legacy.wait(5)
+
+            def poll(self) -> bool:
+                # Simulate a backend that has audible tail/cleanup after the
+                # first line. It never reports that line as finished on its own.
+                return getattr(self.active, "text", "") == "Second"
+
+            def stop(self) -> None:
+                self.active = None
+                self.release_legacy.set()
+
+            def close(self) -> None:
+                self.active = None
+                self.release_legacy.set()
+
+        def mark_started(text: str, _at: float) -> None:
+            started.append(text)
+            if text == "First":
+                first_started.set()
+            if text == "Second":
+                second_started.set()
+
+        session = Session()
+        engine = TtsEngine(
+            session_factory=lambda: session,
+            initial_voice_id="sapi:test",
+            on_started=mark_started,
+        )
+        try:
+            first = engine.speak("First", "sapi:test")
+            self.assertTrue(first_started.wait(1))
+            second = engine.replace("Second", "sapi:test")
+            self.assertTrue(second_started.wait(0.5), "replacement waited for backend cleanup")
+            self.assertTrue(second.wait(0.5))
+            self.assertTrue(first.wait(0.5))
+            self.assertEqual(started, ["First", "Second"])
+            self.assertTrue(session.replaced)
+        finally:
+            session.release_legacy.set()
+            engine.shutdown()
+
+    def test_queue_keeps_one_next_line_and_drops_older_pending_lines(self) -> None:
+        started: list[str] = []
+        first_started = threading.Event()
+        third_started = threading.Event()
+
+        class Session:
+            def __init__(self) -> None:
+                self.active: object | None = None
+                self.finished = False
+
+            def prepare(self, _voice_id: str) -> None:
+                pass
+
+            def start(self, request: object, on_started: object, replace: bool = False) -> None:
+                self.active = request
+                self.finished = False
+                on_started()  # type: ignore[operator]
+
+            def poll(self) -> bool:
+                return self.finished
+
+            def finish(self) -> None:
+                self.finished = True
+
+            def stop(self) -> None:
+                self.active = None
+                self.finished = True
+
+            def close(self) -> None:
+                self.stop()
+
+        def mark_started(text: str, _at: float) -> None:
+            started.append(text)
+            if text == "First":
+                first_started.set()
+            if text == "Third":
+                third_started.set()
+
+        session = Session()
+        engine = TtsEngine(session_factory=lambda: session, on_started=mark_started)
+        try:
+            first = engine.enqueue("First")
+            self.assertTrue(first_started.wait(1))
+            second = engine.enqueue("Second")
+            third = engine.enqueue("Third")
+            self.assertTrue(second.wait(0.5), "the replaced pending line stayed queued")
+            self.assertFalse(third_started.wait(0.05))
+            session.finish()
+            self.assertTrue(third_started.wait(0.5))
+            self.assertTrue(first.wait(0.5))
+            self.assertEqual(started, ["First", "Third"])
+        finally:
+            engine.shutdown()
+
     def test_one_backend_session_is_reused_and_reports_real_playback_boundaries(self) -> None:
         created = 0
         started: list[str] = []

@@ -16,6 +16,7 @@ class ReaderTextState:
     corrected_ocr_text: str = ""
     last_successful_text: str = ""
     currently_spoken_text: str = ""
+    currently_spoken_request_id: int | None = None
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
 
     def accept_success(self, result: CorrectionResult) -> bool:
@@ -30,16 +31,22 @@ class ReaderTextState:
                 return True
             return False
 
-    def begin_speech(self, text: str) -> None:
+    def begin_speech(self, text: str, request_id: int | None = None) -> None:
         with self._lock:
             self.currently_spoken_text = text.strip()
+            self.currently_spoken_request_id = request_id
 
-    def end_speech(self, text: str = "") -> None:
+    def end_speech(self, text: str = "", request_id: int | None = None) -> None:
         """Clear only the utterance that actually ended, preserving newer speech."""
 
         with self._lock:
+            if request_id is not None and self.currently_spoken_request_id != request_id:
+                return
+            if request_id is None and text and self.currently_spoken_text != text.strip():
+                return
             if not text or self.currently_spoken_text == text.strip():
                 self.currently_spoken_text = ""
+                self.currently_spoken_request_id = None
 
     def clear_history(self) -> None:
         with self._lock:

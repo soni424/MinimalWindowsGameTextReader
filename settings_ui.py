@@ -342,6 +342,7 @@ class SettingsUI:
     """Own the desktop interface while application actions remain callbacks."""
 
     APPEARANCE_CHOICES = ("System", "Dark", "Light")
+    CAPTURE_SPEECH_CHOICES = ("Replace current line", "Queue next line")
 
     def __init__(
         self,
@@ -386,6 +387,14 @@ class SettingsUI:
         self.voice_value = tk.StringVar()
         self.rate_value = tk.IntVar(value=settings["rate"])
         self.volume_value = tk.IntVar(value=settings["volume"])
+        capture_mode = settings.get("speech", {}).get("capture_mode", "replace")
+        self.capture_speech_value = tk.StringVar(
+            value=(
+                "Replace current line"
+                if capture_mode == "replace"
+                else "Queue next line"
+            )
+        )
         self.fixed_hotkey = tk.StringVar(value=settings["hotkeys"]["fixed"])
         self.snippet_hotkey = tk.StringVar(value=settings["hotkeys"]["snippet"])
         self.read_again_hotkey = tk.StringVar(value=settings["hotkeys"].get("read_again", ""))
@@ -951,7 +960,26 @@ class SettingsUI:
         volume_spin.bind("<FocusOut>", lambda _event: self._save_voice_settings())
         volume_spin.bind("<Return>", lambda _event: self._save_voice_settings())
         ttk.Label(voice, text="0 to 100", style="CardHint.TLabel").grid(row=4, column=3, sticky="e", padx=(8, 0), pady=4)
-        ttk.Button(voice, text="Test selected voice", command=self.test_voice).grid(row=5, column=1, columnspan=3, sticky="e", pady=(10, 0))
+        ttk.Label(voice, text="New capture while speaking", style="CardText.TLabel").grid(row=5, column=0, sticky="w", pady=(10, 4))
+        self.capture_speech_combo = self._register_combobox(
+            ttk.Combobox(
+                voice,
+                textvariable=self.capture_speech_value,
+                values=self.CAPTURE_SPEECH_CHOICES,
+                state="readonly",
+                width=24,
+            )
+        )
+        self.capture_speech_combo.grid(row=5, column=1, columnspan=3, sticky="ew", padx=(12, 0), pady=(10, 4))
+        self.capture_speech_combo.bind("<<ComboboxSelected>>", lambda _event: self._save_capture_speech_settings())
+        ttk.Label(
+            voice,
+            text="Replace mode minimizes the handoff delay; queue mode lets the current line finish before the next line.",
+            style="CardHint.TLabel",
+            wraplength=620,
+            justify="left",
+        ).grid(row=6, column=1, columnspan=3, sticky="w", padx=(12, 0), pady=(0, 4))
+        ttk.Button(voice, text="Test selected voice", command=self.test_voice).grid(row=7, column=1, columnspan=3, sticky="e", pady=(10, 0))
 
         keys = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         keys.grid(row=1, column=0, sticky="ew")
@@ -1208,6 +1236,15 @@ class SettingsUI:
         self._voice_save_after = None
         voice_id, rate, volume = self.speech_settings()
         self.config.update(voice=voice_id, rate=rate, volume=volume)
+
+    def _save_capture_speech_settings(self) -> None:
+        mode = "replace" if self.capture_speech_value.get() == "Replace current line" else "queue"
+        self.config.update(speech={"capture_mode": mode})
+        self.set_status(
+            "New captures will replace the current line."
+            if mode == "replace"
+            else "New captures will queue one next line."
+        )
 
     def _read_now(self) -> None:
         self._save_voice_settings()

@@ -73,8 +73,8 @@ class GameTextReaderApplication:
         self.corrector = OcrCorrector()
         self.tts = TtsEngine(
             on_error=self._speech_error,
-            on_started=self._speech_started,
-            on_finished=self._speech_finished,
+            on_started_with_id=self._speech_started,
+            on_finished_with_id=self._speech_finished,
             initial_voice_id=settings["voice"],
         )
         self.capture_worker = CaptureWorker(
@@ -158,8 +158,8 @@ class GameTextReaderApplication:
         received_at = time.perf_counter()
         self._schedule(lambda: self.read_fixed_box(hide_settings=True, requested_at=received_at))
 
-    def _speech_started(self, text: str, started_at: float) -> None:
-        self.text_state.begin_speech(text)
+    def _speech_started(self, request_id: int, text: str, started_at: float) -> None:
+        self.text_state.begin_speech(text, request_id)
         timing: PipelineTimings | None = None
         with self._timing_lock:
             pending = self._pending_speech_timing
@@ -169,25 +169,27 @@ class GameTextReaderApplication:
         if timing is None:
             return
         total_ms = max(0.0, (started_at - timing.requested_at) * 1000.0)
+        handoff_ms = max(0.0, (started_at - timing.correction_finished_at) * 1000.0)
         measured = {
             "dispatch_ms": timing.dispatch_ms,
             "capture_ms": timing.capture_ms,
             "ocr_ms": timing.ocr_ms,
             "correction_ms": timing.correction_ms,
             "speech_start_ms": total_ms,
+            "speech_handoff_ms": handoff_ms,
         }
         with self._timing_lock:
             self.last_performance = measured
         self._schedule(
             lambda: self.ui.set_status(
-                f"Speech started in {total_ms:.0f} ms • capture {timing.capture_ms:.0f} • OCR {timing.ocr_ms:.0f} • correction {timing.correction_ms:.1f} ms"
+                f"Speech started in {total_ms:.0f} ms • handoff {handoff_ms:.0f} ms • capture {timing.capture_ms:.0f} • OCR {timing.ocr_ms:.0f} • correction {timing.correction_ms:.1f} ms"
             )
         )
         if self.config.get().get("ocr", {}).get("debug_logging"):
             self._write_performance_debug(measured)
 
-    def _speech_finished(self, text: str) -> None:
-        self.text_state.end_speech(text)
+    def _speech_finished(self, request_id: int, text: str) -> None:
+        self.text_state.end_speech(text, request_id)
 
     def _apply_initial_hotkeys(self) -> None:
         settings = self.config.get()
@@ -365,7 +367,8 @@ class GameTextReaderApplication:
         if hasattr(self, "_timing_lock"):
             with self._timing_lock:
                 self._pending_speech_timing = None
-        self.tts.speak(text, settings["voice"], settings["rate"], settings["volume"])
+        replace = getattr(self.tts, "replace", None) or self.tts.speak
+        replace(text, settings["voice"], settings["rate"], settings["volume"])
         self.ui.set_status("Reading the last captured text again.")
 
     def clear_text_history(self) -> None:
@@ -404,12 +407,13 @@ class GameTextReaderApplication:
             handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
             logger.addHandler(handler)
         logger.info(
-            "Pipeline timing: dispatch %.1f ms; capture %.1f ms; OCR %.1f ms; correction %.1f ms; speech started %.1f ms after request",
+            "Pipeline timing: dispatch %.1f ms; capture %.1f ms; OCR %.1f ms; correction %.1f ms; speech started %.1f ms after request; handoff %.1f ms after correction",
             timings["dispatch_ms"],
             timings["capture_ms"],
             timings["ocr_ms"],
             timings["correction_ms"],
             timings["speech_start_ms"],
+            timings["speech_handoff_ms"],
         )
 
     @staticmethod
@@ -426,17 +430,13 @@ class GameTextReaderApplication:
         restore_after_grab: Callable[[], None] | None = None,
         requested_at: float | None = None,
     ) -> None:
-        """Replace pending work and let the persistent OCR worker process the newest box."""
+        """Submit a capture while speech continues on its independent worker."""
         if len(box) != 4 or box[2] <= box[0] or box[3] <= box[1]:
             self.ui.set_status("The selected region is invalid.", error=True)
             if restore_after_grab:
                 restore_after_grab()
             return
         settings = self.config.get()
-        self.tts.stop()
-        self.text_state.end_speech()
-        with self._timing_lock:
-            self._pending_speech_timing = None
         self.ui.set_status(f"{source}: capturing and reading…")
         after_capture = (lambda: self._schedule(restore_after_grab)) if restore_after_grab else None
         try:
@@ -447,10 +447,6 @@ class GameTextReaderApplication:
                 requested_at=requested_at,
                 on_capture_complete=after_capture,
             )
-            # This second stop closes the publication race with a result that
-            # finished at the exact moment the new request was submitted.
-            self.tts.stop()
-            self.text_state.end_speech()
         except Exception as exc:
             if restore_after_grab:
                 restore_after_grab()
@@ -471,16 +467,22 @@ class GameTextReaderApplication:
         if not final_text:
             self._schedule(lambda: self.ui.set_status(f"{job.source}: no readable text found."))
             return
-        # Stop anything started while OCR was running; this capture remains the
-        # newest requested game dialogue and therefore owns the audio channel.
-        self.tts.stop()
-        self.text_state.end_speech()
         with self._timing_lock:
             self._pending_speech_timing = (final_text, timings)
         change_count = len(result.corrections)
         suffix = f" ({change_count} correction{'s' if change_count != 1 else ''})" if change_count else ""
-        self._schedule(lambda: self.ui.set_status(f"{job.source}: text sent to speech{suffix}."))
-        self.tts.speak(final_text, str(settings.get("voice", "")), int(settings.get("rate", 0)), int(settings.get("volume", 100)))
+        voice = str(settings.get("voice", ""))
+        rate = int(settings.get("rate", 0))
+        volume = int(settings.get("volume", 100))
+        capture_mode = settings.get("speech", {}).get("capture_mode", "replace")
+        speech_status = "replacing current speech" if capture_mode == "replace" else "queued as the next line"
+        self._schedule(lambda: self.ui.set_status(f"{job.source}: {speech_status}{suffix}."))
+        if capture_mode == "replace":
+            replace = getattr(self.tts, "replace", None) or self.tts.speak
+            replace(final_text, voice, rate, volume)
+        else:
+            enqueue = getattr(self.tts, "enqueue", None) or self.tts.speak
+            enqueue(final_text, voice, rate, volume)
 
     def _capture_failed(self, job: CaptureJob, exc: Exception) -> None:
         message = str(exc) if isinstance(exc, OcrError) else f"{job.source} capture failed: {exc}"
