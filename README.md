@@ -1,8 +1,30 @@
-# Windows Game Text Reader
+# Minimal Windows Game Text Reader
 
 A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and other on-screen text. It uses the native Windows Media OCR API through `winocr`, then reads recognised text through Windows speech voices.
 
-## Run
+[Download the latest Windows release](https://github.com/soni424/MinimalWindowsGameTextReader/releases/latest)
+
+## Highlights
+
+- Reads a reusable fixed screen region or a one-time snippet selection.
+- Uses offline Windows OCR and installed Windows speech voices.
+- Conservatively corrects common game-font OCR mistakes while protecting fictional terminology.
+- Supports custom replacements and protected game-specific words.
+- Provides configurable system-wide keyboard shortcuts.
+- Stores multiple capture profiles and remaps their regions after display changes.
+- Includes System, Dark, and Light appearances throughout the main interface, dialogs, and drop-down controls.
+- Runs quietly from the Windows system tray.
+
+## Install the Windows release
+
+1. Open the [Releases page](https://github.com/soni424/MinimalWindowsGameTextReader/releases).
+2. Download the Windows ZIP attached to the latest release.
+3. Extract the complete ZIP. Do not run the executable from inside the archive.
+4. Open the extracted `GameTextReader` folder and run `GameTextReader.exe`.
+
+Python is not required when using the packaged Windows release. Windows may display a SmartScreen warning because the application is not digitally signed.
+
+## Run from source
 
 Use Python 3.10 or newer on Windows:
 
@@ -12,6 +34,14 @@ python main.py
 ```
 
 The first run opens settings and creates a tray icon. Closing the settings window minimizes it normally. Choose **Hide settings to tray** from the tray menu only when you explicitly want to remove it from the taskbar; use **Quit** to exit fully.
+
+## What's new in v1.1.1
+
+- Added a shared application icon for the window, taskbar, system tray, and packaged executable.
+- Replaced light native profile prompts with dialogs that follow the current appearance.
+- Fixed combo boxes and their open drop-down lists in Dark Mode, including arrow buttons, borders, scrollbars, focus, hover, pressed, disabled, and selected states.
+- Appearance changes now update existing controls immediately without restarting the app.
+- Added regression coverage for the updated interface behavior.
 
 ## Use
 
@@ -39,6 +69,7 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 ## Interface and appearance
 
 - Choose **System**, **Dark**, or **Light** from the Appearance menu. The preference is saved automatically.
+- Profile prompts, confirmation dialogs, combo boxes, and open drop-down lists follow the active appearance. Newly opened dialogs also follow appearance changes made while the app is running.
 - The **Reader** tab keeps the fixed box, latest OCR text, and copy controls together.
 - The **OCR corrections** tab contains correction strength, replacements, and protected game terms.
 - The **Voice & shortcuts** tab contains speech controls and global shortcut setup.
@@ -53,6 +84,18 @@ Choose **Record** beside Read Fixed Box, Select a Snippet, or the optional Read 
 Windows OCR, its event loop, SAPI voice tokens/player, and WinRT synthesizer/media player remain alive on their dedicated workers for repeated dialogue captures. When OCR debug logging is enabled, the same rotating log includes measured dispatch, capture, OCR, correction, and speech-start timings.
 
 Settings persist in `config.json` next to the application.
+
+## Build the Windows app
+
+Install the project requirements and PyInstaller in a virtual environment, then build from the repository folder:
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install pyinstaller
+python -m PyInstaller GameTextReader.spec --noconfirm
+```
+
+The packaged application is created in `dist/GameTextReader`.
 
 ## Verify
 
