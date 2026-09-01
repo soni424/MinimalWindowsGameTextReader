@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+work/
+config.json
+ocr_debug.log*
+.venv/

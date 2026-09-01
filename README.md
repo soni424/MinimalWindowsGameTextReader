@@ -1,0 +1,57 @@
+# Windows Game Text Reader
+
+A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and other on-screen text. It uses the native Windows Media OCR API through `winocr`, then reads recognised text through Windows speech voices.
+
+## Run
+
+Use Python 3.10 or newer on Windows:
+
+```powershell
+python -m pip install -r requirements.txt
+python main.py
+```
+
+The first run opens settings and creates a tray icon. Closing the settings window hides it to the tray; use the tray icon's **Quit** command to exit fully.
+
+## Use
+
+1. Choose an installed Windows voice, speed, and volume.
+2. Select **Draw / Edit Read Box**, then drag inside the outlined area to move it or drag an edge/handle to resize it. Press **Enter** to save or **Esc** to cancel.
+3. Press the Fixed Box hotkey (default `Alt+Z`) to OCR and read that saved area.
+4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
+
+## OCR correction
+
+The **OCR corrections** tab controls an offline post-processing stage. The original Windows OCR result is retained, while the corrected result is displayed, copied, and spoken.
+
+- **Conservative** (default) fixes only high-confidence context mistakes such as `I sow it` → `I saw it`, `In o second` → `In a second`, and common `I/l/1`, `S/5`, or `h/b` errors.
+- **Balanced** also uses a bundled English frequency dictionary to repair likely one-character mistakes, joined words, letter/digit confusions, and safe punctuation spacing. Its dictionary loads in the background.
+- **Strong** permits wider dictionary matches and is best used with protected terms.
+- Custom replacement rules run first. Each rule can be enabled separately and can match whole words, exact case, or any case.
+- Protected terms keep character names, locations, item names, and game-specific vocabulary unchanged.
+- Select **Corrections** beside the latest result to compare raw and corrected text and see why every change was made.
+
+Correction debug logging is optional. When enabled, a size-limited `ocr_debug.log` is written next to `config.json`; normal UI status stays concise.
+
+## Interface and appearance
+
+- Choose **System**, **Dark**, or **Light** from the Appearance menu. The preference is saved automatically.
+- The **Reader** tab keeps the fixed box, latest OCR text, and copy controls together.
+- The **OCR corrections** tab contains correction strength, replacements, and protected game terms.
+- The **Voice & shortcuts** tab contains speech controls and global shortcut setup.
+- **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
+- Speed and volume changes are saved automatically, including changes made with the sliders.
+
+Global shortcut reads stay behind the active game window. A newer completed read replaces stale queued speech instead of allowing a long audio backlog to build up.
+
+Choose **Record** beside either shortcut, then press any supported Windows combination such as `Ctrl+Shift+T`, `Alt+Q`, `Shift+F8`, or `Ctrl+Shift+Space`. Shortcuts can be cleared individually. Windows registration detects conflicts with this app and other programs before a setting is saved; `F12` is rejected because Windows reserves it.
+
+Settings persist in `config.json` next to the application.
+
+## Verify
+
+```powershell
+python test_app.py
+```
+
+The test suite verifies conservative and balanced correction, negative game-term cases, custom replacements, config persistence, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
