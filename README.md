@@ -76,6 +76,8 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 - The **Voice & shortcuts** tab contains speech controls and global shortcut setup.
 - **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
 - Speed and volume changes are saved automatically, including changes made with the sliders.
+- **Test selected voice** uses a 60% preview cap to avoid an unexpected blast; normal reads still use the saved volume.
+- SAPI voice previews and readings use verified PCM metadata before MediaPlayer playback, preventing format-related distortion.
 - **New capture while speaking** defaults to replacing the current line immediately. Queue mode lets the current line finish first. **Allow overlapping lines** starts a new voice while the current one continues; the maximum number of simultaneous readings can be set from 2 to 4. Overlap is capped to keep audio resources bounded.
 - Window size, position, and normal/maximized state are restored. Capture and speech operations never write transient minimized geometry over that preference.
 

@@ -115,9 +115,10 @@ def _normalise_max_overlap(value: object) -> int:
 class _WindowsSpeechSession:
     """Own one SAPI synthesizer and one Windows MediaPlayer on one worker."""
 
-    # SAPI format 13 is 22.05 kHz, 16-bit, mono PCM. SpMemoryStream returns
-    # PCM frames without a RIFF header, so the header is added before playback.
-    _SAPI_FORMAT_TYPE = 13
+    # SAFT22kHz16BitMono. SpMemoryStream returns PCM frames without a RIFF
+    # header, so the header is added before playback from SAPI's actual format
+    # metadata below.
+    _SAPI_FORMAT_TYPE = 22
     _SAMPLE_RATE = 22050
     _SAMPLE_WIDTH = 2
     _CHANNELS = 1
@@ -256,6 +257,8 @@ class _WindowsSpeechSession:
         self._ensure_sapi()
         speaker = self._sapi_speaker
         memory_stream = None
+        audio_format = None
+        wave_format = None
         raw = b""
         try:
             import win32com.client
@@ -263,6 +266,13 @@ class _WindowsSpeechSession:
             memory_stream = win32com.client.Dispatch("SAPI.SpMemoryStream")
             audio_format = win32com.client.Dispatch("SAPI.SpAudioFormat")
             audio_format.Type = self._SAPI_FORMAT_TYPE
+            wave_format = audio_format.GetWaveFormatEx()
+            format_tag = int(getattr(wave_format, "FormatTag", 1))
+            sample_rate = int(wave_format.SamplesPerSec)
+            bits_per_sample = int(wave_format.BitsPerSample)
+            channels = int(wave_format.Channels)
+            if format_tag != 1 or sample_rate <= 0 or channels <= 0 or bits_per_sample <= 0 or bits_per_sample % 8:
+                raise TtsError("Windows SAPI returned an unsupported PCM audio format.")
             memory_stream.Format = audio_format
             speaker.Rate = request.rate
             speaker.Volume = request.volume
@@ -279,13 +289,18 @@ class _WindowsSpeechSession:
             except Exception:
                 pass
             self._close_stream(memory_stream)
+            wave_format = None
+            audio_format = None
         if not raw:
             raise TtsError("Windows SAPI returned an empty audio buffer.")
+        block_align = channels * (bits_per_sample // 8)
+        if len(raw) % block_align:
+            raise TtsError("Windows SAPI returned incomplete PCM audio frames.")
         output = io.BytesIO()
         with wave.open(output, "wb") as wav_file:
-            wav_file.setnchannels(self._CHANNELS)
-            wav_file.setsampwidth(self._SAMPLE_WIDTH)
-            wav_file.setframerate(self._SAMPLE_RATE)
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(bits_per_sample // 8)
+            wav_file.setframerate(sample_rate)
             wav_file.writeframes(raw)
         return output.getvalue()
 
@@ -446,7 +461,9 @@ class _WindowsSpeechSession:
         if request.cancel.is_set():
             return
         stream = self._bytes_to_winrt_stream(wav_data)
-        duration = max(0.4, (len(wav_data) - 44) / (self._SAMPLE_RATE * self._SAMPLE_WIDTH))
+        with wave.open(io.BytesIO(wav_data), "rb") as wav_file:
+            frame_rate = max(1, wav_file.getframerate())
+            duration = max(0.4, wav_file.getnframes() / frame_rate)
         try:
             self._start_stream(stream, on_started, replace, duration)
         except Exception:

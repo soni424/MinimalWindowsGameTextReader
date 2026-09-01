@@ -614,6 +614,29 @@ class WindowsComponentTests(unittest.TestCase):
             root.destroy()
             path.unlink(missing_ok=True)
 
+    def test_voice_preview_caps_only_the_preview_volume(self) -> None:
+        calls: list[tuple[object, ...]] = []
+        statuses: list[str] = []
+
+        class Tts:
+            def stop(self) -> None:
+                calls.append(("stop",))
+
+            def speak(self, *args: object) -> None:
+                calls.append(args)
+
+        ui = SettingsUI.__new__(SettingsUI)
+        ui.tts = Tts()
+        ui._save_voice_settings = lambda: None
+        ui.speech_settings = lambda: ("sapi:test", 0, 100)
+        ui.set_status = statuses.append
+
+        ui.test_voice()
+
+        self.assertEqual(calls[0], ("stop",))
+        self.assertEqual(calls[1], ("This is your selected Windows voice.", "sapi:test", 0, 60))
+        self.assertIn("preview volume", statuses[0])
+
     def test_stop_interrupts_current_speech_request(self) -> None:
         class InterruptibleTts(TtsEngine):
             def __init__(self) -> None:
@@ -634,6 +657,53 @@ class WindowsComponentTests(unittest.TestCase):
         finally:
             engine.fallback_cancel.set()
             engine.shutdown()
+
+    def test_sapi_wav_header_matches_the_requested_pcm_format(self) -> None:
+        import io
+        import wave
+
+        import pythoncom
+        import win32com.client
+
+        from tts_engine import _SpeechRequest, _WindowsSpeechSession
+
+        pythoncom.CoInitialize()
+        session = _WindowsSpeechSession()
+        audio_format = None
+        wave_format = None
+        try:
+            audio_format = win32com.client.Dispatch("SAPI.SpAudioFormat")
+            audio_format.Type = session._SAPI_FORMAT_TYPE
+            wave_format = audio_format.GetWaveFormatEx()
+            expected = (
+                int(wave_format.SamplesPerSec),
+                int(wave_format.BitsPerSample),
+                int(wave_format.Channels),
+            )
+            self.assertEqual(expected, (22050, 16, 1))
+            request = _SpeechRequest(
+                request_id=1,
+                text="SAPI format test",
+                voice_id="",
+                rate=0,
+                volume=20,
+            )
+            wav_data = session._synthesise_sapi_wav(request)
+            with wave.open(io.BytesIO(wav_data), "rb") as wav_file:
+                actual = (
+                    wav_file.getframerate(),
+                    wav_file.getsampwidth() * 8,
+                    wav_file.getnchannels(),
+                )
+            self.assertEqual(
+                actual,
+                expected,
+                "SAPI PCM bytes and the WAV header use different formats",
+            )
+        finally:
+            session.close()
+            del wave_format, audio_format
+            pythoncom.CoUninitialize()
 
     def test_native_winocr_recognition(self) -> None:
         image = Image.new("RGB", (760, 150), "white")

@@ -16,6 +16,11 @@ from tts_engine import TtsEngine, Voice
 from window_state import WindowStateController
 
 
+# Keep an unfamiliar voice preview from unexpectedly playing at the maximum
+# configured volume. Normal capture playback still uses the user's setting.
+VOICE_PREVIEW_MAX_VOLUME = 60
+
+
 def _theme_dialog_window(window: tk.Toplevel, palette: ThemePalette) -> None:
     """Theme a child window's body now and its native frame after mapping."""
     window.configure(bg=palette.window)
@@ -1340,9 +1345,21 @@ class SettingsUI:
         """Speak a short confirmation via the selected Windows voice."""
         self._save_voice_settings()
         voice, rate, volume = self.speech_settings()
+        preview_volume = min(volume, VOICE_PREVIEW_MAX_VOLUME)
         self.tts.stop()
-        self.tts.speak("This is your selected Windows voice.", voice, rate, volume)
-        self.set_status("Playing a voice sample…")
+        self.tts.speak(
+            "This is your selected Windows voice.",
+            voice,
+            rate,
+            preview_volume,
+        )
+        if preview_volume < volume:
+            self.set_status(
+                f"Playing a voice sample at {preview_volume}% preview volume; "
+                f"normal reads use {volume}%."
+            )
+        else:
+            self.set_status("Playing a voice sample…")
 
     def stop_speech(self) -> None:
         """Interrupt current speech and discard anything waiting behind it."""
