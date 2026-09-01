@@ -342,7 +342,11 @@ class SettingsUI:
     """Own the desktop interface while application actions remain callbacks."""
 
     APPEARANCE_CHOICES = ("System", "Dark", "Light")
-    CAPTURE_SPEECH_CHOICES = ("Replace current line", "Queue next line")
+    CAPTURE_SPEECH_CHOICES = (
+        "Replace current line",
+        "Queue next line",
+        "Allow overlapping lines",
+    )
 
     def __init__(
         self,
@@ -387,13 +391,21 @@ class SettingsUI:
         self.voice_value = tk.StringVar()
         self.rate_value = tk.IntVar(value=settings["rate"])
         self.volume_value = tk.IntVar(value=settings["volume"])
-        capture_mode = settings.get("speech", {}).get("capture_mode", "replace")
+        speech_settings = settings.get("speech", {})
+        capture_mode = speech_settings.get("capture_mode", "replace")
         self.capture_speech_value = tk.StringVar(
             value=(
                 "Replace current line"
                 if capture_mode == "replace"
-                else "Queue next line"
+                else (
+                    "Allow overlapping lines"
+                    if capture_mode == "overlap"
+                    else "Queue next line"
+                )
             )
+        )
+        self.capture_overlap_value = tk.IntVar(
+            value=max(2, min(4, int(speech_settings.get("max_overlap", 2))))
         )
         self.fixed_hotkey = tk.StringVar(value=settings["hotkeys"]["fixed"])
         self.snippet_hotkey = tk.StringVar(value=settings["hotkeys"]["snippet"])
@@ -971,15 +983,50 @@ class SettingsUI:
             )
         )
         self.capture_speech_combo.grid(row=5, column=1, columnspan=3, sticky="ew", padx=(12, 0), pady=(10, 4))
-        self.capture_speech_combo.bind("<<ComboboxSelected>>", lambda _event: self._save_capture_speech_settings())
+        self.capture_speech_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._capture_mode_changed(),
+        )
+        self.overlap_options = ttk.Frame(voice, style="CardInner.TFrame")
+        self.overlap_options.columnconfigure(1, weight=1)
+        ttk.Label(
+            self.overlap_options,
+            text="Maximum simultaneous readings",
+            style="CardText.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        self.capture_overlap_spin = ttk.Spinbox(
+            self.overlap_options,
+            from_=2,
+            to=4,
+            increment=1,
+            textvariable=self.capture_overlap_value,
+            width=5,
+            command=self._save_capture_speech_settings,
+        )
+        self.capture_overlap_spin.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        self.capture_overlap_spin.bind(
+            "<FocusOut>", lambda _event: self._save_capture_speech_settings()
+        )
+        self.capture_overlap_spin.bind(
+            "<Return>", lambda _event: self._save_capture_speech_settings()
+        )
+        self.overlap_options.grid(
+            row=6,
+            column=1,
+            columnspan=3,
+            sticky="ew",
+            padx=(12, 0),
+            pady=(4, 0),
+        )
         ttk.Label(
             voice,
-            text="Replace mode minimizes the handoff delay; queue mode lets the current line finish before the next line.",
+            text="Replace is the clearest rapid mode; queue waits for the current line; overlap starts new voices immediately.",
             style="CardHint.TLabel",
             wraplength=620,
             justify="left",
-        ).grid(row=6, column=1, columnspan=3, sticky="w", padx=(12, 0), pady=(0, 4))
-        ttk.Button(voice, text="Test selected voice", command=self.test_voice).grid(row=7, column=1, columnspan=3, sticky="e", pady=(10, 0))
+        ).grid(row=7, column=1, columnspan=3, sticky="w", padx=(12, 0), pady=(0, 4))
+        ttk.Button(voice, text="Test selected voice", command=self.test_voice).grid(row=8, column=1, columnspan=3, sticky="e", pady=(10, 0))
+        self._set_overlap_options_visible(self._capture_mode() == "overlap")
 
         keys = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         keys.grid(row=1, column=0, sticky="ew")
@@ -1237,14 +1284,49 @@ class SettingsUI:
         voice_id, rate, volume = self.speech_settings()
         self.config.update(voice=voice_id, rate=rate, volume=volume)
 
+    def _capture_mode(self) -> str:
+        return {
+            "Replace current line": "replace",
+            "Queue next line": "queue",
+            "Allow overlapping lines": "overlap",
+        }.get(self.capture_speech_value.get(), "replace")
+
+    def _set_overlap_options_visible(self, visible: bool) -> None:
+        if not hasattr(self, "overlap_options"):
+            return
+        if visible:
+            self.overlap_options.grid()
+        else:
+            self.overlap_options.grid_remove()
+
+    def _capture_mode_changed(self) -> None:
+        mode = self._capture_mode()
+        self._set_overlap_options_visible(mode == "overlap")
+        self._save_capture_speech_settings()
+
     def _save_capture_speech_settings(self) -> None:
-        mode = "replace" if self.capture_speech_value.get() == "Replace current line" else "queue"
-        self.config.update(speech={"capture_mode": mode})
-        self.set_status(
-            "New captures will replace the current line."
-            if mode == "replace"
-            else "New captures will queue one next line."
+        mode = self._capture_mode()
+        try:
+            max_overlap = max(2, min(4, int(self.capture_overlap_value.get())))
+        except (tk.TclError, TypeError, ValueError):
+            max_overlap = 2
+            self.capture_overlap_value.set(max_overlap)
+        self.config.update(
+            speech={"capture_mode": mode, "max_overlap": max_overlap}
         )
+        setter = getattr(self.tts, "set_capture_mode", None)
+        if callable(setter):
+            try:
+                setter(mode, max_overlap)
+            except Exception:
+                pass
+        if mode == "replace":
+            message = "New captures will replace the current line."
+        elif mode == "queue":
+            message = "New captures will queue one next line."
+        else:
+            message = f"New captures may overlap (up to {max_overlap} voices)."
+        self.set_status(message)
 
     def _read_now(self) -> None:
         self._save_voice_settings()

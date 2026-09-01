@@ -30,6 +30,7 @@ from hotkey_manager import HotkeyError, HotkeyManager, normalise_hotkey, to_pynp
 from main import GameTextReaderApplication
 from ocr_correction import OcrCorrector
 from ocr_engine import OcrEngine, OcrError
+from overlay import QuickSnippetOverlay
 from settings_ui import SettingsUI, _ShortcutRecorderDialog
 from tray_app import TrayApp
 from tts_engine import TtsEngine
@@ -58,6 +59,36 @@ class WindowsComponentTests(unittest.TestCase):
         spec = (Path(__file__).resolve().parent / "GameTextReader.spec").read_text(encoding="utf-8")
         self.assertIn('datas = [("assets", "assets")]', spec)
         self.assertIn('icon="assets/app_icon.ico"', spec)
+        self.assertIn('manifest="assets/GameTextReader.manifest"', spec)
+
+    def test_overlay_uses_one_exact_pane_per_monitor(self) -> None:
+        from capture_profiles import MonitorInfo
+
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        monitors = [
+            MonitorInfo("DISPLAY1", 0, 0, 960, 1080, 96, 96, True),
+            MonitorInfo("DISPLAY2", 960, 0, 1920, 1080, 144, 144, False),
+        ]
+        overlay = QuickSnippetOverlay(
+            root,
+            lambda _box: None,
+            lambda: None,
+            monitor_provider=lambda: monitors,
+        )
+        try:
+            root.update()
+            self.assertEqual(len(overlay.panes), 2)
+            for pane in overlay.panes:
+                self.assertEqual(pane.canvas.winfo_width(), pane.monitor.width)
+                self.assertEqual(pane.canvas.winfo_height(), pane.monitor.height)
+            external = overlay.panes[1]
+            self.assertEqual(overlay.screen_to_canvas(1200, 400, external), (240.0, 400.0))
+            self.assertEqual(overlay.canvas_to_screen(240, 400, external), (1200, 400))
+        finally:
+            overlay.close()
+            root.update()
+            root.destroy()
 
     def test_main_window_accepts_the_branded_icon(self) -> None:
         import tkinter as tk
@@ -542,6 +573,10 @@ class WindowsComponentTests(unittest.TestCase):
             ui.capture_speech_value.set("Queue next line")
             ui._save_capture_speech_settings()
             self.assertEqual(store.get()["speech"]["capture_mode"], "queue")
+            ui.capture_speech_value.set("Allow overlapping lines")
+            ui.capture_overlap_value.set(3)
+            ui._save_capture_speech_settings()
+            self.assertEqual(store.get()["speech"], {"capture_mode": "overlap", "max_overlap": 3})
         finally:
             root.destroy()
             path.unlink(missing_ok=True)

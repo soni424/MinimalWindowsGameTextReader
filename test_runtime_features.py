@@ -59,6 +59,7 @@ class ConfigurationMigrationTests(unittest.TestCase):
         self.assertEqual(settings["theme"], "dark")
         self.assertEqual(settings["rate"], 4)
         self.assertEqual(settings["speech"]["capture_mode"], "replace")
+        self.assertEqual(settings["speech"]["max_overlap"], 2)
         self.assertEqual(
             settings["window"],
             {"width": 1110, "height": 870, "x": -1320, "y": 45, "state": "maximized"},
@@ -67,11 +68,15 @@ class ConfigurationMigrationTests(unittest.TestCase):
     def test_rapid_capture_mode_is_validated_and_persisted(self) -> None:
         self.assertEqual(
             validate_config({"speech": {"capture_mode": "replace"}})["speech"],
-            {"capture_mode": "replace"},
+            {"capture_mode": "replace", "max_overlap": 2},
         )
         self.assertEqual(
             validate_config({"speech": {"capture_mode": "unknown"}})["speech"],
-            {"capture_mode": "replace"},
+            {"capture_mode": "replace", "max_overlap": 2},
+        )
+        self.assertEqual(
+            validate_config({"speech": {"capture_mode": "overlap", "max_overlap": 9}})["speech"],
+            {"capture_mode": "overlap", "max_overlap": 4},
         )
 
 
@@ -533,6 +538,68 @@ class SpeechResourceTests(unittest.TestCase):
             self.assertTrue(third_started.wait(0.5))
             self.assertTrue(first.wait(0.5))
             self.assertEqual(started, ["First", "Third"])
+        finally:
+            engine.shutdown()
+
+    def test_overlap_starts_two_sessions_and_reuses_the_oldest_slot(self) -> None:
+        started: list[str] = []
+        sessions: list[object] = []
+        third_started = threading.Event()
+
+        class Session:
+            def __init__(self) -> None:
+                self.request: object | None = None
+                self.finished = False
+                self.closed = False
+                sessions.append(self)
+
+            def prepare(self, _voice_id: str) -> None:
+                pass
+
+            def start(self, request: object, on_started: object, replace: bool = False) -> None:
+                self.request = request
+                self.finished = False
+                on_started()  # type: ignore[operator]
+
+            def poll(self) -> bool:
+                return self.finished
+
+            def stop(self) -> None:
+                self.finished = True
+
+            def close(self) -> None:
+                self.closed = True
+
+            def finish(self) -> None:
+                self.finished = True
+
+        def mark_started(text: str, _at: float) -> None:
+            started.append(text)
+            if text == "Third":
+                third_started.set()
+
+        engine = TtsEngine(
+            session_factory=Session,
+            initial_capture_mode="overlap",
+            initial_max_overlap=2,
+            on_started=mark_started,
+        )
+        try:
+            first = engine.overlap("First")
+            second = engine.overlap("Second")
+            self.assertTrue(first.wait(1) is False or first.is_set())
+            deadline = time.monotonic() + 1
+            while len(sessions) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(len(sessions), 2)
+            third = engine.overlap("Third")
+            self.assertFalse(third.wait(0.05))
+            sessions[0].finish()  # type: ignore[attr-defined]
+            self.assertTrue(third_started.wait(1), "third overlap did not fill the freed slot")
+            self.assertEqual(started[:3], ["First", "Second", "Third"])
+            sessions[1].finish()  # type: ignore[attr-defined]
+            sessions[2].finish()  # type: ignore[attr-defined]
+            self.assertTrue(engine.wait_until_idle(1))
         finally:
             engine.shutdown()
 

@@ -26,6 +26,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "volume": 100,
     "speech": {
         "capture_mode": "replace",
+        "max_overlap": 2,
     },
     "fixed_box": None,
     "window": {
@@ -284,8 +285,14 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     raw_speech = raw.get("speech") if isinstance(raw.get("speech"), Mapping) else {}
     capture_mode = raw_speech.get("capture_mode", DEFAULT_CONFIG["speech"]["capture_mode"])
     capture_mode = capture_mode.strip().lower() if isinstance(capture_mode, str) else DEFAULT_CONFIG["speech"]["capture_mode"]
-    if capture_mode not in {"queue", "replace"}:
+    if capture_mode not in {"queue", "replace", "overlap"}:
         capture_mode = DEFAULT_CONFIG["speech"]["capture_mode"]
+    max_overlap = _clamp_int(
+        raw_speech.get("max_overlap"),
+        2,
+        4,
+        DEFAULT_CONFIG["speech"]["max_overlap"],
+    )
     strength = raw_ocr.get("strength", DEFAULT_CONFIG["ocr"]["strength"])
     strength = strength.strip().lower() if isinstance(strength, str) else DEFAULT_CONFIG["ocr"]["strength"]
     if strength not in {"conservative", "balanced", "strong"}:
@@ -306,6 +313,7 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "volume": _clamp_int(raw.get("volume"), 0, 100, DEFAULT_CONFIG["volume"]),
         "speech": {
             "capture_mode": capture_mode,
+            "max_overlap": max_overlap,
         },
         # Keep the legacy key as a compatibility mirror while profiles remain
         # the authoritative capture-area model.

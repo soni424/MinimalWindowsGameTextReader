@@ -29,10 +29,17 @@ from tts_engine import TtsEngine
 
 
 def enable_dpi_awareness() -> None:
-    """Ask Windows for per-monitor DPI-aware physical coordinates before creating Tk."""
+    """Ask Windows for Per-Monitor V2 physical coordinates before creating Tk."""
     try:
-        # PROCESS_PER_MONITOR_DPI_AWARE is required for screenshot pixels,
-        # overlay coordinates, and game window coordinates to match at >100% DPI.
+        # Per-Monitor V2 keeps each top-level overlay in the monitor's physical
+        # coordinate space when displays use different scaling factors.
+        context = ctypes.c_void_p(-4)  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(context):
+            return
+    except Exception:
+        pass
+    try:
+        # V1 is retained for older Windows builds that do not expose the V2 API.
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
         return
     except Exception:
@@ -76,6 +83,8 @@ class GameTextReaderApplication:
             on_started_with_id=self._speech_started,
             on_finished_with_id=self._speech_finished,
             initial_voice_id=settings["voice"],
+            initial_capture_mode=settings.get("speech", {}).get("capture_mode", "replace"),
+            initial_max_overlap=settings.get("speech", {}).get("max_overlap", 2),
         )
         self.capture_worker = CaptureWorker(
             capture=self._grab_screen,
@@ -474,12 +483,22 @@ class GameTextReaderApplication:
         voice = str(settings.get("voice", ""))
         rate = int(settings.get("rate", 0))
         volume = int(settings.get("volume", 100))
-        capture_mode = settings.get("speech", {}).get("capture_mode", "replace")
-        speech_status = "replacing current speech" if capture_mode == "replace" else "queued as the next line"
+        speech_settings = settings.get("speech", {})
+        capture_mode = speech_settings.get("capture_mode", "replace")
+        max_overlap = speech_settings.get("max_overlap", 2)
+        if capture_mode == "replace":
+            speech_status = "replacing current speech"
+        elif capture_mode == "overlap":
+            speech_status = f"overlapping speech (up to {max_overlap} voices)"
+        else:
+            speech_status = "queued as the next line"
         self._schedule(lambda: self.ui.set_status(f"{job.source}: {speech_status}{suffix}."))
         if capture_mode == "replace":
             replace = getattr(self.tts, "replace", None) or self.tts.speak
             replace(final_text, voice, rate, volume)
+        elif capture_mode == "overlap":
+            overlap = getattr(self.tts, "overlap", None) or self.tts.speak
+            overlap(final_text, voice, rate, volume)
         else:
             enqueue = getattr(self.tts, "enqueue", None) or self.tts.speak
             enqueue(final_text, voice, rate, volume)

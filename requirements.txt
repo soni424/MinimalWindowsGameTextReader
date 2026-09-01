@@ -6,3 +6,4 @@ winocr>=0.0.2
 winrt-Windows.Media.Core
 winrt-Windows.Media.Playback
 winrt-Windows.Media.SpeechSynthesis
+winrt-Windows.Storage.Streams
