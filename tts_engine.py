@@ -33,6 +33,21 @@ DEFAULT_CAPTURE_MODE = "replace"
 DEFAULT_MAX_OVERLAP = 2
 MIN_MAX_OVERLAP = 2
 MAX_MAX_OVERLAP = 4
+_MAX_RETIRED_PLAYERS = 3
+_PLAYBACK_RETIRE_GRACE_SECONDS = 0.5
+
+
+@dataclass
+class _PlaybackChannel:
+    """One isolated MediaPlayer and the stream it currently owns."""
+
+    player: object
+    stream: object | None = None
+    source: object | None = None
+    finished: threading.Event = field(default_factory=threading.Event)
+    failed: threading.Event = field(default_factory=threading.Event)
+    error: str = ""
+    retired: bool = False
 
 
 class TtsError(RuntimeError):
@@ -113,7 +128,7 @@ def _normalise_max_overlap(value: object) -> int:
 
 
 class _WindowsSpeechSession:
-    """Own one SAPI synthesizer and one Windows MediaPlayer on one worker."""
+    """Own worker-thread speech synthesis and isolated MediaPlayer channels."""
 
     # SAFT22kHz16BitMono. SpMemoryStream returns PCM frames without a RIFF
     # header, so the header is added before playback from SAPI's actual format
@@ -130,11 +145,8 @@ class _WindowsSpeechSession:
         self._winrt_loop: asyncio.AbstractEventLoop | None = None
         self._winrt_synthesizer = None
         self._winrt_player = None
-        self._winrt_stream = None
-        self._winrt_source = None
-        self._winrt_finished = threading.Event()
-        self._winrt_failed = threading.Event()
-        self._winrt_error = ""
+        self._winrt_current_channel: _PlaybackChannel | None = None
+        self._winrt_retired_channels: list[tuple[_PlaybackChannel, float]] = []
         self._selected_winrt_voice = ""
         self._active_backend = ""
         self._winrt_deadline = 0.0
@@ -176,38 +188,34 @@ class _WindowsSpeechSession:
 
     def poll(self) -> bool:
         """Return whether the active media playback has finished."""
+        self._close_retired_channels()
         if self._active_backend != "winrt":
             return True
-        if self._winrt_failed.is_set():
-            raise TtsError(self._winrt_error or "Windows media playback failed.")
-        if self._winrt_finished.is_set():
+        channel = self._winrt_current_channel
+        if channel is None:
+            return True
+        if channel.failed.is_set():
+            raise TtsError(channel.error or "Windows media playback failed.")
+        if channel.finished.is_set():
+            self._retire_current_channel()
             return True
         # The event is normally delivered by MediaPlayer. This deadline is a
         # defensive fallback for projections that miss media_ended.
         if self._winrt_deadline and time.monotonic() >= self._winrt_deadline:
-            if self._winrt_player is not None:
-                try:
-                    self._winrt_player.pause()
-                except Exception:
-                    pass
-            self._winrt_finished.set()
+            try:
+                channel.player.pause()
+            except Exception:
+                pass
+            channel.finished.set()
+            self._retire_current_channel()
             return True
         return False
 
     def stop(self) -> None:
-        """Stop MediaPlayer without issuing SAPI purge commands."""
-        if self._winrt_player is not None:
-            try:
-                self._winrt_player.pause()
-                self._winrt_player.source = None
-            except Exception:
-                pass
-        self._close_stream(self._winrt_stream)
-        self._winrt_stream = None
-        self._winrt_source = None
+        """Stop playback without closing a stream still owned by MediaPlayer."""
+        self._retire_current_channel()
         self._active_backend = ""
         self._winrt_deadline = 0.0
-        self._winrt_finished.set()
 
     @staticmethod
     def _close_stream(stream: object | None) -> None:
@@ -217,6 +225,94 @@ class _WindowsSpeechSession:
             stream.close()
         except Exception:
             pass
+
+    def _close_channel(self, channel: _PlaybackChannel) -> None:
+        player = channel.player
+        try:
+            player.pause()
+        except Exception:
+            pass
+        try:
+            player.source = None
+        except Exception:
+            pass
+        try:
+            player.close()
+        except Exception:
+            pass
+        self._close_stream(channel.source)
+        self._close_stream(channel.stream)
+        channel.source = None
+        channel.stream = None
+
+    def _close_retired_channels(self, *, force: bool = False) -> None:
+        if not self._winrt_retired_channels:
+            return
+        now = time.monotonic()
+        remaining: list[tuple[_PlaybackChannel, float]] = []
+        for channel, retire_at in self._winrt_retired_channels:
+            if not force and retire_at > now:
+                remaining.append((channel, retire_at))
+                continue
+            self._close_channel(channel)
+        self._winrt_retired_channels = remaining
+
+    def _retire_channel(self, channel: _PlaybackChannel | None) -> None:
+        if channel is None or channel.retired:
+            return
+        channel.retired = True
+        try:
+            # Mute before pausing so any decoder tail remains silent.
+            channel.player.volume = 0.0
+        except Exception:
+            pass
+        try:
+            channel.player.pause()
+        except Exception:
+            pass
+        self._winrt_retired_channels.append(
+            (channel, time.monotonic() + _PLAYBACK_RETIRE_GRACE_SECONDS)
+        )
+        if len(self._winrt_retired_channels) > _MAX_RETIRED_PLAYERS:
+            oldest, _retire_at = self._winrt_retired_channels.pop(0)
+            self._close_channel(oldest)
+
+    def _retire_current_channel(self) -> None:
+        channel = self._winrt_current_channel
+        if channel is None:
+            return
+        self._winrt_current_channel = None
+        if self._winrt_player is channel.player:
+            self._winrt_player = None
+        self._retire_channel(channel)
+        self._winrt_deadline = 0.0
+
+    def _new_playback_channel(self) -> _PlaybackChannel:
+        try:
+            from winrt.windows.media.playback import MediaPlayer
+        except ImportError as exc:
+            raise TtsError(
+                "Windows Media playback components are not installed. "
+                "Install the application's requirements and try again."
+            ) from exc
+        player = MediaPlayer()
+        channel = _PlaybackChannel(player)
+
+        def media_ended(*_args: object) -> None:
+            channel.finished.set()
+
+        def media_failed(*_args: object) -> None:
+            channel.error = "Windows MediaPlayer reported an audio failure."
+            channel.failed.set()
+            channel.finished.set()
+
+        try:
+            player.add_media_ended(media_ended)
+            player.add_media_failed(media_failed)
+        except AttributeError:
+            player.media_ended += media_ended
+            player.media_failed += media_failed
+        return channel
 
     def _ensure_sapi(self) -> None:
         if self._sapi_speaker is not None:
@@ -305,7 +401,7 @@ class _WindowsSpeechSession:
         return output.getvalue()
 
     def _ensure_winrt(self) -> None:
-        if self._winrt_player is not None:
+        if self._winrt_loop is not None:
             return
         try:
             from winrt.windows.media.playback import MediaPlayer
@@ -316,14 +412,6 @@ class _WindowsSpeechSession:
                 "Install the application's requirements and try again."
             ) from exc
         self._winrt_loop = asyncio.new_event_loop()
-        self._winrt_player = MediaPlayer()
-        try:
-            self._winrt_player.add_media_ended(self._winrt_playback_ended)
-            self._winrt_player.add_media_failed(self._winrt_playback_failed)
-        except AttributeError:
-            # Older projections exposed events as assignable attributes.
-            self._winrt_player.media_ended += self._winrt_playback_ended
-            self._winrt_player.media_failed += self._winrt_playback_failed
         self._winrt_data_writer = DataWriter
         self._winrt_stream_type = InMemoryRandomAccessStream
 
@@ -334,14 +422,6 @@ class _WindowsSpeechSession:
 
         self._winrt_synthesizer = SpeechSynthesizer()
         self._winrt_voice_type = SpeechSynthesizer
-
-    def _winrt_playback_ended(self, *_args: object) -> None:
-        self._winrt_finished.set()
-
-    def _winrt_playback_failed(self, *_args: object) -> None:
-        self._winrt_error = "Windows MediaPlayer reported an audio failure."
-        self._winrt_failed.set()
-        self._winrt_finished.set()
 
     def _select_winrt_voice(self, native_id: str) -> None:
         if native_id == self._selected_winrt_voice:
@@ -383,22 +463,24 @@ class _WindowsSpeechSession:
         stream.seek(0)
         return stream
 
-    def _set_media_stream(self, stream: object) -> None:
-        player = self._winrt_player
-        if player is None:
-            raise TtsError("Windows media playback is not initialized.")
+    def _set_media_stream(
+        self, channel: _PlaybackChannel, stream: object
+    ) -> None:
+        player = channel.player
         try:
             # Current winrt projections accept the stream directly and read
             # its content type from the WAV header.
             player.set_stream_source(stream)
-            self._winrt_source = None
         except TypeError:
             # Older projections require a MediaSource wrapper.
             from winrt.windows.media.core import MediaSource
 
-            source = MediaSource.create_from_stream(stream, "audio/wav")
+            content_type = getattr(stream, "content_type", None)
+            if not isinstance(content_type, str) or "/" not in content_type:
+                content_type = "audio/wav"
+            source = MediaSource.create_from_stream(stream, content_type)
             player.source = source
-            self._winrt_source = source
+            channel.source = source
 
     def _start_stream(
         self,
@@ -407,23 +489,26 @@ class _WindowsSpeechSession:
         replace: bool,
         duration_seconds: float,
     ) -> None:
-        previous_stream = self._winrt_stream
-        if replace:
-            self.stop()
-        self._winrt_failed.clear()
-        self._winrt_error = ""
-        self._winrt_finished.clear()
-        self._set_media_stream(stream)
-        self._winrt_stream = stream
+        self._ensure_winrt()
+        self._close_retired_channels()
+        # Replacements use a fresh MediaPlayer. The old player is muted and
+        # retained briefly so Windows can finish any asynchronous decoder work.
+        self._retire_current_channel()
+        channel = self._new_playback_channel()
+        channel.stream = stream
+        self._winrt_current_channel = channel
+        self._winrt_player = channel.player
         try:
-            self._winrt_player.play()
+            self._set_media_stream(channel, stream)
+            channel.player.volume = 1.0
+            channel.player.play()
         except Exception:
-            self._close_stream(stream)
-            self._winrt_stream = None
+            self._winrt_current_channel = None
+            self._winrt_player = None
+            self._close_channel(channel)
             raise
         self._active_backend = "winrt"
         self._winrt_deadline = time.monotonic() + max(0.75, duration_seconds + 1.0)
-        self._close_stream(previous_stream)
         on_started()
 
     def _start_winrt(
@@ -472,11 +557,11 @@ class _WindowsSpeechSession:
 
     def close(self) -> None:
         self.stop()
-        if self._winrt_player is not None:
-            try:
-                self._winrt_player.close()
-            except Exception:
-                pass
+        current = self._winrt_current_channel
+        self._winrt_current_channel = None
+        if current is not None:
+            self._close_channel(current)
+        self._close_retired_channels(force=True)
         if self._winrt_synthesizer is not None:
             try:
                 self._winrt_synthesizer.close()
@@ -493,8 +578,6 @@ class _WindowsSpeechSession:
             except Exception:
                 pass
         self._winrt_player = None
-        self._winrt_stream = None
-        self._winrt_source = None
         self._winrt_synthesizer = None
         self._winrt_loop = None
         self._sapi_voices.clear()
@@ -1101,7 +1184,12 @@ class TtsEngine:
                                 self._cancel_queued(pending)
                                 pending = None
                                 self._set_pending(None)
-                                self._finish_active(active, stop_backend=True)
+                                # The playback session creates an isolated
+                                # channel for the new line. Stopping the old
+                                # MediaPlayer here would tear down an
+                                # asynchronous stream handoff and can inject a
+                                # burst into the new sentence.
+                                self._finish_active(active, stop_backend=False)
                                 active = self._start_request(request, replace=True)
                             else:
                                 self._cancel_queued(pending)

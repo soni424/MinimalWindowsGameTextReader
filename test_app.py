@@ -33,7 +33,7 @@ from ocr_engine import OcrEngine, OcrError
 from overlay import QuickSnippetOverlay
 from settings_ui import SettingsUI, _ShortcutRecorderDialog
 from tray_app import TrayApp
-from tts_engine import TtsEngine
+from tts_engine import TtsEngine, _WindowsSpeechSession
 
 
 @unittest.skipUnless(__import__("os").name == "nt", "Windows native APIs are required")
@@ -704,6 +704,88 @@ class WindowsComponentTests(unittest.TestCase):
             session.close()
             del wave_format, audio_format
             pythoncom.CoUninitialize()
+
+    def test_media_player_replacement_retains_stream_until_handoff(self) -> None:
+        class Stream:
+            content_type = "audio/wav"
+
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class Player:
+            def __init__(self) -> None:
+                self.source = None
+                self.play_count = 0
+                self.pause_count = 0
+                self.volume = 1.0
+
+            def play(self) -> None:
+                self.play_count += 1
+
+            def pause(self) -> None:
+                self.pause_count += 1
+
+        session = _WindowsSpeechSession.__new__(_WindowsSpeechSession)
+        old_stream = Stream("old")
+        new_stream = Stream("new")
+        old_player = Player()
+        new_player = Player()
+        old_channel = type("Channel", (), {})()
+        old_channel.player = old_player
+        old_channel.stream = old_stream
+        old_channel.source = None
+        old_channel.finished = threading.Event()
+        old_channel.failed = threading.Event()
+        old_channel.error = ""
+        old_channel.retired = False
+        session._winrt_current_channel = old_channel
+        session._winrt_retired_channels = []
+        session._winrt_player = old_player
+        session._winrt_loop = object()
+        session._winrt_deadline = 0.0
+
+        # The test uses a fake channel factory so the handoff itself stays
+        # deterministic and never depends on a physical audio device.
+        class ChannelFactory:
+            def __call__(_self: object) -> object:
+                channel = type("Channel", (), {})()
+                channel.player = new_player
+                channel.stream = None
+                channel.source = None
+                channel.finished = threading.Event()
+                channel.failed = threading.Event()
+                channel.error = ""
+                channel.retired = False
+                return channel
+
+        session._new_playback_channel = ChannelFactory()  # type: ignore[method-assign]
+
+        class SourceSetter:
+            @staticmethod
+            def set_media_stream(channel: object, stream: object) -> None:
+                channel.player.source = stream
+
+        session._set_media_stream = SourceSetter.set_media_stream  # type: ignore[method-assign]
+        session._start_stream(new_stream, lambda: None, True, 1.0)
+
+        self.assertFalse(
+            old_stream.closed,
+            "the previous stream was closed during the asynchronous handoff",
+        )
+        self.assertEqual(old_player.pause_count, 1)
+        self.assertEqual(old_player.volume, 0.0)
+        self.assertEqual(new_player.play_count, 1)
+        self.assertEqual(len(session._winrt_retired_channels), 1)
+        session._winrt_retired_channels = [
+            (channel, 0.0)
+            for channel, _retire_at in session._winrt_retired_channels
+        ]
+        session._close_retired_channels()
+        self.assertTrue(old_stream.closed)
 
     def test_native_winocr_recognition(self) -> None:
         image = Image.new("RGB", (760, 150), "white")
