@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Game Text Reader app icon">
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="#2563eb"/>
+
+  <g fill="none" stroke="#ffffff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M148 300V205Q148 156 197 156H300"/>
+    <path d="M724 156H827Q876 156 876 205V300"/>
+    <path d="M148 724V827Q148 876 197 876H300"/>
+    <path d="M724 876H827Q876 876 876 827V724"/>
+  </g>
+
+  <path
+    d="M326 286H626Q790 286 790 450V572Q790 736 626 736H449L292 846L326 728Q214 700 214 572V450Q214 286 326 286Z"
+    fill="#ffffff"
+    stroke="#0f172a"
+    stroke-width="54"
+    stroke-linejoin="round"
+  />
+
+  <g fill="#0f172a">
+    <rect x="326" y="418" width="292" height="58" rx="29"/>
+    <rect x="326" y="548" width="260" height="58" rx="29"/>
+  </g>
+
+  <path
+    d="M690 462H728L796 410V612L728 560H690Q656 560 656 526V496Q656 462 690 462Z"
+    fill="#ffffff"
+    stroke="#0f172a"
+    stroke-width="48"
+    stroke-linejoin="round"
+  />
+  <g fill="none" stroke="#0f172a" stroke-width="44" stroke-linecap="round">
+    <path d="M834 458Q884 511 834 564"/>
+    <path d="M874 412Q964 511 874 610"/>
+  </g>
+</svg>

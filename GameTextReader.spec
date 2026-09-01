@@ -1,22 +1,27 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import collect_dynamic_libs
 from PyInstaller.utils.hooks import collect_submodules
-from PyInstaller.utils.hooks import collect_all
 
-datas = []
+
+datas = [("assets", "assets")]
 binaries = []
 hiddenimports = []
-binaries += collect_dynamic_libs('winrt')
-hiddenimports += collect_submodules('winrt')
-hiddenimports += collect_submodules('pystray')
-tmp_ret = collect_all('winocr')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('symspellpy')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+binaries += collect_dynamic_libs("winrt")
+hiddenimports += collect_submodules("winrt")
+hiddenimports += collect_submodules("pystray")
+tmp_ret = collect_all("winocr")
+datas += tmp_ret[0]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
+tmp_ret = collect_all("symspellpy")
+datas += tmp_ret[0]
+binaries += tmp_ret[1]
+hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['main.py'],
+    ["main.py"],
     pathex=[],
     binaries=binaries,
     datas=datas,
@@ -35,7 +40,8 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='GameTextReader',
+    name="GameTextReader",
+    icon="assets/app_icon.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -54,5 +60,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='GameTextReader',
+    name="GameTextReader",
 )

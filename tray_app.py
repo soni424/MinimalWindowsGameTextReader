@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from app_resources import load_app_icon
+
 
 class TrayApp:
     """A small pystray wrapper that routes tray actions back to Tk safely."""
@@ -34,15 +36,7 @@ class TrayApp:
 
     @staticmethod
     def _make_icon_image():
-        from PIL import Image, ImageDraw
-
-        image = Image.new("RGBA", (64, 64), "#0f172a")
-        draw = ImageDraw.Draw(image)
-        draw.rounded_rectangle((9, 8, 55, 56), radius=10, fill="#2563eb")
-        draw.rectangle((18, 18, 46, 22), fill="#e0f2fe")
-        draw.rectangle((18, 29, 42, 33), fill="#e0f2fe")
-        draw.rectangle((18, 40, 36, 44), fill="#e0f2fe")
-        return image
+        return load_app_icon(64)
 
     def _invoke(self, name: str) -> None:
         callback = self._callbacks[name]

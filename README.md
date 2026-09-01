@@ -61,3 +61,13 @@ python -m unittest discover -v
 ```
 
 The test suite verifies correction, profile migration/CRUD/display mapping, window restoration and DPI layout, Read Again isolation, newest-job replacement, reusable OCR/TTS sessions, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
+
+## App icon assets
+
+The flat source mark is stored in `assets/app_icon.svg`. Runtime PNGs and the multi-size Windows ICO are generated from that source and shared by the main window, taskbar, system tray, and packaged executable.
+
+To regenerate the exported icon assets on Windows with Microsoft Edge and Pillow installed:
+
+```powershell
+python tools/build_icon_assets.py
+```

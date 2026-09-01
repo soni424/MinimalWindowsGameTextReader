@@ -13,6 +13,7 @@ from typing import Callable
 
 from PIL import ImageGrab
 
+from app_resources import apply_window_icon
 from appearance import flush_windows_compositor
 from capture_pipeline import CaptureJob, CaptureWorker, PipelineTimings
 from capture_profiles import CaptureProfileManager
@@ -42,6 +43,16 @@ def enable_dpi_awareness() -> None:
         pass
 
 
+def set_windows_app_identity() -> None:
+    """Give Windows a stable identity for taskbar grouping and icon selection."""
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "GameTextReader.Desktop"
+        )
+    except Exception:
+        pass
+
+
 class GameTextReaderApplication:
     """Coordinate GUI, tray, hotkeys, native OCR, and queued speech synthesis."""
 
@@ -49,6 +60,7 @@ class GameTextReaderApplication:
         self.config = ConfigStore()
         settings = self.config.load()
         self.root = tk.Tk()
+        apply_window_icon(self.root)
         self._closed = False
         self._scheduled_actions: SimpleQueue[Callable[[], None]] = SimpleQueue()
         self._overlay: BoxEditorOverlay | QuickSnippetOverlay | None = None
@@ -505,6 +517,7 @@ class GameTextReaderApplication:
 
 def main() -> None:
     """Create and run the desktop application."""
+    set_windows_app_identity()
     enable_dpi_awareness()
     GameTextReaderApplication().run()
 

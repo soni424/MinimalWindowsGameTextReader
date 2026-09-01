@@ -15,6 +15,12 @@ from types import SimpleNamespace
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app_resources import (
+    APP_ICON_ICO_PATH,
+    APP_ICON_MASTER_PATH,
+    APP_ICON_WINDOW_PATH,
+    apply_window_icon,
+)
 from appearance import apply_windows_title_bar
 from config import ConfigStore, validate_config
 from hotkey_manager import HotkeyError, HotkeyManager, normalise_hotkey, to_pynput_hotkey
@@ -22,12 +28,44 @@ from main import GameTextReaderApplication
 from ocr_correction import OcrCorrector
 from ocr_engine import OcrEngine, OcrError
 from settings_ui import SettingsUI, _ShortcutRecorderDialog
+from tray_app import TrayApp
 from tts_engine import TtsEngine
 
 
 @unittest.skipUnless(__import__("os").name == "nt", "Windows native APIs are required")
 class WindowsComponentTests(unittest.TestCase):
     """Exercise the four native integration points without launching the GUI."""
+
+    def test_app_icon_assets_cover_window_tray_and_packaging(self) -> None:
+        for path in (APP_ICON_MASTER_PATH, APP_ICON_WINDOW_PATH, APP_ICON_ICO_PATH):
+            self.assertTrue(path.is_file(), f"Missing icon asset: {path}")
+
+        with Image.open(APP_ICON_MASTER_PATH) as master:
+            self.assertEqual(master.size, (1024, 1024))
+            self.assertEqual(master.mode, "RGBA")
+        with Image.open(APP_ICON_ICO_PATH) as windows_icon:
+            self.assertTrue(
+                {(16, 16), (32, 32), (48, 48), (256, 256)}.issubset(windows_icon.ico.sizes())
+            )
+
+        tray_icon = TrayApp._make_icon_image()
+        self.assertEqual(tray_icon.size, (64, 64))
+        self.assertEqual(tray_icon.mode, "RGBA")
+
+        spec = (Path(__file__).resolve().parent / "GameTextReader.spec").read_text(encoding="utf-8")
+        self.assertIn('datas = [("assets", "assets")]', spec)
+        self.assertIn('icon="assets/app_icon.ico"', spec)
+
+    def test_main_window_accepts_the_branded_icon(self) -> None:
+        import tkinter as tk
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            self.assertTrue(apply_window_icon(root))
+            self.assertIsNotNone(getattr(root, "_game_text_reader_icon", None))
+        finally:
+            root.destroy()
 
     def test_fixed_hotkey_uses_the_saved_box_without_showing_settings(self) -> None:
         class Root:
