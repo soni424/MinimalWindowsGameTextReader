@@ -13,6 +13,7 @@ from config import ConfigStore
 from hotkey_manager import HotkeyError, normalise_hotkey
 from ocr_correction import CorrectionResult
 from tts_engine import TtsEngine, Voice
+from window_state import WindowStateController
 
 
 class _ReplacementDialog:
@@ -158,9 +159,15 @@ class SettingsUI:
         on_draw_box: Callable[[], None],
         on_read_box: Callable[[], None],
         on_quick_snippet: Callable[[], None],
-        on_apply_hotkeys: Callable[[str, str], None],
+        on_apply_hotkeys: Callable[[str, str, str], None],
         on_ocr_settings_changed: Callable[[], None] | None = None,
         on_shortcut_recording: Callable[[bool], None] | None = None,
+        on_read_again: Callable[[], None] | None = None,
+        on_clear_text: Callable[[], None] | None = None,
+        on_profile_create: Callable[[str], None] | None = None,
+        on_profile_rename: Callable[[str, str], None] | None = None,
+        on_profile_delete: Callable[[str], None] | None = None,
+        on_profile_select: Callable[[str], None] | None = None,
     ) -> None:
         self.root = root
         self.config = config
@@ -171,6 +178,12 @@ class SettingsUI:
         self.on_apply_hotkeys = on_apply_hotkeys
         self.on_ocr_settings_changed = on_ocr_settings_changed or (lambda: None)
         self.on_shortcut_recording = on_shortcut_recording or (lambda _active: None)
+        self.on_read_again = on_read_again or (lambda: None)
+        self.on_clear_text = on_clear_text or (lambda: None)
+        self.on_profile_create = on_profile_create or (lambda _name: None)
+        self.on_profile_rename = on_profile_rename or (lambda _profile_id, _name: None)
+        self.on_profile_delete = on_profile_delete or (lambda _profile_id: None)
+        self.on_profile_select = on_profile_select or (lambda _profile_id: None)
         self._voices: dict[str, Voice] = {}
         self._voice_labels: dict[str, str] = {}
         self._label_by_id: dict[str, str] = {}
@@ -183,7 +196,11 @@ class SettingsUI:
         self.volume_value = tk.IntVar(value=settings["volume"])
         self.fixed_hotkey = tk.StringVar(value=settings["hotkeys"]["fixed"])
         self.snippet_hotkey = tk.StringVar(value=settings["hotkeys"]["snippet"])
+        self.read_again_hotkey = tk.StringVar(value=settings["hotkeys"].get("read_again", ""))
         self.theme_value = tk.StringVar(value=settings["theme"].title())
+        self.profile_value = tk.StringVar()
+        self._profile_id_by_name: dict[str, str] = {}
+        self._profile_name_by_id: dict[str, str] = {}
         self.box_value = tk.StringVar()
         self.capture_meta = tk.StringVar(value="Nothing captured yet")
         self.voice_info = tk.StringVar(value="Discovering installed Windows voices…")
@@ -202,7 +219,7 @@ class SettingsUI:
         self._configure_styles(self._palette)
         self._build()
         self._apply_tk_colours(self._palette)
-        self.set_box(settings.get("fixed_box"))
+        self.set_profiles(settings["capture_profiles"], settings["selected_profile_id"], settings.get("fixed_box"))
 
         # This callback is registered from Tk's main thread. The worker only
         # places plain Python data in a queue and never calls Tk itself.
@@ -211,10 +228,11 @@ class SettingsUI:
 
     def _configure_window(self) -> None:
         self.root.title("Game Text Reader")
-        self.root.geometry("900x800")
-        self.root.minsize(720, 660)
+        self.root.minsize(780, 720)
+        self.window_state = WindowStateController(self.root, self.config)
         self.root.option_add("*Font", "{Segoe UI} 10")
         self.root.configure(bg=self._palette.window)
+        self.root.bind("<Map>", self._window_mapped, add="+")
         self.style = ttk.Style(self.root)
         try:
             self.style.theme_use("clam")
@@ -383,32 +401,61 @@ class SettingsUI:
         self.notebook.add(settings_tab, text="Voice & shortcuts")
         reader_tab.columnconfigure(0, weight=1)
         reader_tab.rowconfigure(1, weight=1)
-        settings_tab.columnconfigure(0, weight=1)
         ocr_tab.columnconfigure(0, weight=1)
         ocr_tab.rowconfigure(1, weight=1)
 
         self._build_reader_tab(reader_tab)
         self._build_ocr_tab(ocr_tab)
-        self._build_settings_tab(settings_tab)
+        self._build_settings_tab(self._make_scrollable_tab(settings_tab))
 
         status_bar = ttk.Frame(outer, style="Status.TFrame", padding=(2, 10, 2, 0))
         status_bar.pack(fill="x")
         ttk.Label(status_bar, text="●", style="Status.TLabel").pack(side="left", padx=(0, 7))
         self.status_label = ttk.Label(status_bar, textvariable=self.status_value, style="Status.TLabel", anchor="w")
         self.status_label.pack(side="left", fill="x", expand=True)
-        ttk.Label(status_bar, text="Close to keep running in the tray", style="Status.TLabel").pack(side="right")
+        ttk.Label(status_bar, text="Close minimizes • tray keeps shortcuts ready", style="Status.TLabel").pack(side="right")
+
+    def _make_scrollable_tab(self, parent: ttk.Frame) -> ttk.Frame:
+        """Keep all controls reachable on high-DPI or short displays."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0, bg=self._palette.window)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        content = ttk.Frame(canvas, style="App.TFrame", padding=(0, 0, 6, 0))
+        window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window_id, width=event.width))
+        canvas.bind("<MouseWheel>", lambda event: canvas.yview_scroll(int(-event.delta / 120), "units"))
+        self.settings_canvas = canvas
+        return content
 
     def _build_reader_tab(self, parent: ttk.Frame) -> None:
         box_card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         box_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         box_card.columnconfigure(0, weight=1)
-        ttk.Label(box_card, text="Fixed read box", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Label(box_card, text="The fixed shortcut captures this exact rectangle without bringing this window forward.", style="CardHint.TLabel").grid(row=2, column=0, sticky="w", pady=(3, 0))
+        ttk.Label(box_card, text="Capture area", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         box_actions = ttk.Frame(box_card, style="CardInner.TFrame")
-        box_actions.grid(row=0, column=1, rowspan=3, sticky="e", padx=(12, 0))
-        ttk.Button(box_actions, text="Edit box", command=self.on_draw_box).pack(side="left")
+        box_actions.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        ttk.Button(box_actions, text="Set capture area", command=self.on_draw_box).pack(side="left")
         ttk.Button(box_actions, text="Read now", style="Primary.TButton", command=self._read_now).pack(side="left", padx=(7, 0))
+
+        profile_row = ttk.Frame(box_card, style="CardInner.TFrame")
+        profile_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        profile_row.columnconfigure(1, weight=1)
+        ttk.Label(profile_row, text="Profile", style="CardText.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.profile_combo = ttk.Combobox(profile_row, textvariable=self.profile_value, state="readonly")
+        self.profile_combo.grid(row=0, column=1, sticky="ew")
+        self.profile_combo.bind("<<ComboboxSelected>>", self._profile_selected)
+        profile_actions = ttk.Frame(profile_row, style="CardInner.TFrame")
+        profile_actions.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        ttk.Button(profile_actions, text="New", style="Compact.TButton", command=self.create_profile).pack(side="left")
+        ttk.Button(profile_actions, text="Rename", style="Compact.TButton", command=self.rename_profile).pack(side="left", padx=(5, 0))
+        ttk.Button(profile_actions, text="Delete", style="Compact.TButton", command=self.delete_profile).pack(side="left", padx=(5, 0))
+        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.", style="CardHint.TLabel").grid(row=3, column=0, columnspan=2, sticky="w", pady=(3, 0))
 
         captured = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         captured.grid(row=1, column=0, sticky="nsew")
@@ -430,6 +477,8 @@ class SettingsUI:
         self.captured_text.grid(row=2, column=0, columnspan=2, sticky="nsew")
         capture_actions = ttk.Frame(captured, style="CardInner.TFrame")
         capture_actions.grid(row=0, column=1, rowspan=2, sticky="e")
+        self.read_again_button = ttk.Button(capture_actions, text="Read Again", style="Primary.TButton", command=self.on_read_again, state="disabled")
+        self.read_again_button.pack(side="left", padx=(0, 6))
         self.details_button = ttk.Button(capture_actions, text="Corrections", style="Compact.TButton", command=self.show_correction_details, state="disabled")
         self.details_button.pack(side="left")
         ttk.Button(capture_actions, text="Clear", style="Compact.TButton", command=self.clear_text).pack(side="left")
@@ -546,7 +595,15 @@ class SettingsUI:
         snippet_actions.grid(row=3, column=2, sticky="e")
         ttk.Button(snippet_actions, text="Record", style="Compact.TButton", command=lambda: self.record_shortcut(self.snippet_hotkey, "Select a Snippet")).pack(side="left")
         ttk.Button(snippet_actions, text="Clear", style="Compact.TButton", command=lambda: self.snippet_hotkey.set("")).pack(side="left", padx=(5, 0))
-        ttk.Button(keys, text="Apply shortcuts", style="Primary.TButton", command=self.apply_hotkeys).grid(row=4, column=1, columnspan=2, sticky="e", pady=(10, 0))
+
+        ttk.Label(keys, text="Read Again", style="CardText.TLabel").grid(row=4, column=0, sticky="w", pady=4)
+        ttk.Entry(keys, textvariable=self.read_again_hotkey, width=22, state="readonly").grid(row=4, column=1, sticky="ew", padx=(12, 8), pady=4)
+        again_actions = ttk.Frame(keys, style="CardInner.TFrame")
+        again_actions.grid(row=4, column=2, sticky="e")
+        ttk.Button(again_actions, text="Record", style="Compact.TButton", command=lambda: self.record_shortcut(self.read_again_hotkey, "Read Again")).pack(side="left")
+        ttk.Button(again_actions, text="Clear", style="Compact.TButton", command=lambda: self.read_again_hotkey.set("")).pack(side="left", padx=(5, 0))
+        self.apply_shortcuts_button = ttk.Button(keys, text="Apply shortcuts", style="Primary.TButton", command=self.apply_hotkeys)
+        self.apply_shortcuts_button.grid(row=5, column=1, columnspan=2, sticky="e", pady=(10, 0))
 
     def _apply_tk_colours(self, palette: ThemePalette) -> None:
         self.root.configure(bg=palette.window)
@@ -571,7 +628,13 @@ class SettingsUI:
                 highlightcolor=palette.accent,
                 highlightthickness=1,
             )
+        if hasattr(self, "settings_canvas"):
+            self.settings_canvas.configure(bg=palette.window)
         self.root.after_idle(lambda: apply_windows_title_bar(self.root, palette.dark))
+
+    def _window_mapped(self, _event: object | None = None) -> None:
+        """Reapply native-frame colors whenever Windows creates or remaps it."""
+        apply_windows_title_bar(self.root, self._palette.dark)
 
     def save_ocr_settings(self) -> None:
         """Persist the visible correction controls and user dictionaries."""
@@ -789,7 +852,7 @@ class SettingsUI:
         """Register both shortcuts after saving the current voice settings."""
         self._save_voice_settings()
         try:
-            self.on_apply_hotkeys(self.fixed_hotkey.get(), self.snippet_hotkey.get())
+            self.on_apply_hotkeys(self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get())
         except Exception as exc:
             self.set_status(str(exc), error=True)
             messagebox.showerror("Could not apply shortcuts", str(exc), parent=self.root)
@@ -806,10 +869,75 @@ class SettingsUI:
             target.set(dialog.result)
             self.set_status(f"Recorded {dialog.result}. Select Apply shortcuts to activate it.")
 
-    def set_hotkeys(self, fixed: str, snippet: str) -> None:
+    def set_hotkeys(self, fixed: str, snippet: str, read_again: str = "") -> None:
         """Replace shortcut fields with the canonical values accepted by Windows."""
         self.fixed_hotkey.set(fixed)
         self.snippet_hotkey.set(snippet)
+        self.read_again_hotkey.set(read_again)
+
+    def set_profiles(
+        self,
+        profiles: list[dict[str, object]],
+        selected_profile_id: str,
+        box: list[int] | None = None,
+        unavailable_reason: str = "",
+    ) -> None:
+        """Refresh profile choices and the selected area's availability summary."""
+        self._profile_id_by_name = {str(profile["name"]): str(profile["id"]) for profile in profiles}
+        self._profile_name_by_id = {profile_id: name for name, profile_id in self._profile_id_by_name.items()}
+        names = list(self._profile_id_by_name)
+        self.profile_combo["values"] = names
+        selected_name = self._profile_name_by_id.get(selected_profile_id, names[0] if names else "")
+        self.profile_value.set(selected_name)
+        if unavailable_reason:
+            self.box_value.set(unavailable_reason)
+        else:
+            self.set_box(box)
+
+    def _selected_profile_id(self) -> str:
+        return self._profile_id_by_name.get(self.profile_value.get(), "")
+
+    def _profile_selected(self, _event: object | None = None) -> None:
+        profile_id = self._selected_profile_id()
+        if profile_id:
+            self.on_profile_select(profile_id)
+
+    def create_profile(self) -> None:
+        name = simpledialog.askstring("New capture profile", "Profile name:", parent=self.root)
+        if name is None:
+            return
+        try:
+            self.on_profile_create(name)
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            messagebox.showerror("Could not create profile", str(exc), parent=self.root)
+
+    def rename_profile(self) -> None:
+        profile_id = self._selected_profile_id()
+        if not profile_id:
+            return
+        current = self.profile_value.get()
+        name = simpledialog.askstring("Rename capture profile", "Profile name:", initialvalue=current, parent=self.root)
+        if name is None:
+            return
+        try:
+            self.on_profile_rename(profile_id, name)
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            messagebox.showerror("Could not rename profile", str(exc), parent=self.root)
+
+    def delete_profile(self) -> None:
+        profile_id = self._selected_profile_id()
+        if not profile_id:
+            return
+        name = self.profile_value.get()
+        if not messagebox.askyesno("Delete capture profile", f'Delete "{name}"?', parent=self.root):
+            return
+        try:
+            self.on_profile_delete(profile_id)
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            messagebox.showerror("Could not delete profile", str(exc), parent=self.root)
 
     def set_box(self, box: list[int] | None) -> None:
         """Update the fixed-box summary shown in the Reader tab."""
@@ -835,6 +963,7 @@ class SettingsUI:
             changes = len(result.corrections)
             suffix = f" • {changes} correction{'s' if changes != 1 else ''}" if changes else " • unchanged"
             self.capture_meta.set(f"Latest result • {len(clean)} characters • {lines} line{'s' if lines != 1 else ''}{suffix}")
+            self.set_read_again_enabled(True)
         else:
             self.capture_meta.set("Latest result • no readable text")
         if hasattr(self, "details_button"):
@@ -876,12 +1005,23 @@ class SettingsUI:
         ttk.Button(frame, text="Close", command=window.destroy).grid(row=2, column=0, sticky="e", pady=(10, 0))
 
     def clear_text(self) -> None:
+        self.on_clear_text()
         self._last_result = None
         self.captured_text.delete("1.0", "end")
         self.capture_meta.set("Nothing captured yet")
         if hasattr(self, "details_button"):
             self.details_button.configure(state="disabled")
+        self.set_read_again_enabled(False)
         self.set_status("Captured text cleared.")
+
+    def set_read_again_enabled(self, enabled: bool) -> None:
+        if hasattr(self, "read_again_button"):
+            self.read_again_button.configure(state="normal" if enabled else "disabled")
+
+    def close(self) -> None:
+        """Flush debounced settings before the native window is destroyed."""
+        if hasattr(self, "window_state"):
+            self.window_state.close()
 
     def copy_text(self) -> None:
         """Copy the currently displayed OCR text to the standard clipboard."""
@@ -900,10 +1040,10 @@ class SettingsUI:
         if hasattr(self, "status_label"):
             self.status_label.configure(style="StatusError.TLabel" if error else "Status.TLabel")
 
-    def set_hotkey_status(self, active: bool, fixed: str = "", snippet: str = "") -> None:
+    def set_hotkey_status(self, active: bool, fixed: str = "", snippet: str = "", read_again: str = "") -> None:
         """Update the shortcut health badge after registration changes."""
         if active:
-            labels = "  /  ".join(item for item in (fixed, snippet) if item)
+            labels = "  /  ".join(item for item in (fixed, snippet, read_again) if item)
             self.hotkey_status.set(f"Shortcuts ready  •  {labels}")
             if hasattr(self, "hotkey_badge"):
                 self.hotkey_badge.configure(style="HotkeysOn.TLabel")

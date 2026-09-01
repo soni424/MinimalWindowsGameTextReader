@@ -15,6 +15,9 @@ class TrayApp:
         on_quick_snippet: Callable[[], None],
         on_stop_speech: Callable[[], None],
         on_quit: Callable[[], None],
+        *,
+        on_hide: Callable[[], None] | None = None,
+        on_read_again: Callable[[], None] | None = None,
     ) -> None:
         self._callbacks = {
             "show": on_show,
@@ -23,6 +26,10 @@ class TrayApp:
             "stop": on_stop_speech,
             "quit": on_quit,
         }
+        if on_hide is not None:
+            self._callbacks["hide"] = on_hide
+        if on_read_again is not None:
+            self._callbacks["again"] = on_read_again
         self._icon = None
 
     @staticmethod
@@ -55,8 +62,18 @@ class TrayApp:
                     pystray.Menu.SEPARATOR,
                     pystray.MenuItem("Read fixed box now", lambda *_: self._invoke("fixed")),
                     pystray.MenuItem("Quick snippet", lambda *_: self._invoke("snippet")),
+                    *(
+                        [pystray.MenuItem("Read last text again", lambda *_: self._invoke("again"))]
+                        if "again" in self._callbacks
+                        else []
+                    ),
                     pystray.MenuItem("Stop audio", lambda *_: self._invoke("stop")),
                     pystray.Menu.SEPARATOR,
+                    *(
+                        [pystray.MenuItem("Hide settings to tray", lambda *_: self._invoke("hide"))]
+                        if "hide" in self._callbacks
+                        else []
+                    ),
                     pystray.MenuItem("Quit", lambda *_: self._invoke("quit")),
                 ),
             )

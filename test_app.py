@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from PIL import Image, ImageDraw, ImageFont
 
+from appearance import apply_windows_title_bar
 from config import ConfigStore, validate_config
 from hotkey_manager import HotkeyError, HotkeyManager, normalise_hotkey, to_pynput_hotkey
 from main import GameTextReaderApplication
@@ -31,9 +32,19 @@ class WindowsComponentTests(unittest.TestCase):
     def test_fixed_hotkey_uses_the_saved_box_without_showing_settings(self) -> None:
         class Root:
             withdrawn = False
+            minimized = False
+
+            def state(self) -> str:
+                return "normal"
 
             def withdraw(self) -> None:
                 self.withdrawn = True
+
+            def iconify(self) -> None:
+                self.minimized = True
+
+            def update_idletasks(self) -> None:
+                pass
 
         class Config:
             @staticmethod
@@ -46,12 +57,26 @@ class WindowsComponentTests(unittest.TestCase):
         app.root = Root()
         app.config = Config()
         captured: list[tuple[list[int], str]] = []
-        app.capture_box = lambda box, source: captured.append((box, source))
+        app.capture_box = lambda box, source, **_kwargs: captured.append((box, source))
 
         app.read_fixed_box(hide_settings=True)
 
-        self.assertTrue(app.root.withdrawn)
+        self.assertFalse(app.root.withdrawn)
+        self.assertTrue(app.root.minimized)
         self.assertEqual(captured, [([10, 20, 310, 120], "Fixed box")])
+
+    def test_explicit_tray_hide_is_respected_by_later_hotkeys(self) -> None:
+        class Root:
+            def state(self) -> str:
+                return "withdrawn"
+
+            def iconify(self) -> None:
+                raise AssertionError("An explicitly hidden window was added back to the taskbar")
+
+        app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+        app._closed = False
+        app.root = Root()
+        app.minimize_window()
 
     def test_structured_winocr_result_uses_only_readable_text(self) -> None:
         result = {
@@ -121,6 +146,10 @@ class WindowsComponentTests(unittest.TestCase):
         with self.assertRaises(HotkeyError):
             manager.apply("Ctrl+Shift+Q", "Shift+Ctrl+Q")
 
+        manager_with_replay = HotkeyManager(lambda: None, lambda: None, lambda: None)
+        with self.assertRaises(HotkeyError):
+            manager_with_replay.apply_all("Alt+X", "Alt+C", "Alt+X")
+
     def test_shortcut_recorder_builds_a_chord_from_pressed_keys(self) -> None:
         class Window:
             destroyed = False
@@ -147,6 +176,19 @@ class WindowsComponentTests(unittest.TestCase):
         self.assertEqual(validate_config({"theme": "dark"})["theme"], "dark")
         self.assertEqual(validate_config({"theme": "LIGHT"})["theme"], "light")
         self.assertEqual(validate_config({"theme": "neon"})["theme"], "system")
+
+    def test_read_again_shortcut_is_optional_and_persisted(self) -> None:
+        self.assertEqual(validate_config({})["hotkeys"]["read_again"], "")
+        self.assertEqual(validate_config({"hotkeys": {"read_again": "Ctrl+Shift+R"}})["hotkeys"]["read_again"], "Ctrl+Shift+R")
+
+    def test_native_title_bar_theme_can_be_applied_after_mapping(self) -> None:
+        root = __import__("tkinter").Tk()
+        try:
+            root.update()
+            self.assertTrue(apply_windows_title_bar(root, True))
+            self.assertTrue(apply_windows_title_bar(root, False))
+        finally:
+            root.destroy()
 
     def test_ocr_settings_are_validated_without_breaking_old_configs(self) -> None:
         old_settings = validate_config({"voice": "legacy-voice"})
@@ -262,10 +304,48 @@ class WindowsComponentTests(unittest.TestCase):
             ui = SettingsUI(root, store, SilentTts(), lambda: None, lambda: None, lambda: None, lambda *_: None)
             root.update()
             self.assertEqual(len(ui.notebook.tabs()), 3)
+            self.assertEqual(list(ui.profile_combo["values"]), ["Default"])
+            self.assertTrue(ui.read_again_button.instate(["disabled"]))
+            ui.set_read_again_enabled(True)
+            self.assertFalse(ui.read_again_button.instate(["disabled"]))
+            self.assertTrue(root.geometry().startswith("980x860"))
             ui.theme_value.set("Dark")
             ui._theme_changed()
             root.update()
             self.assertEqual(store.get()["theme"], "dark")
+        finally:
+            root.destroy()
+            path.unlink(missing_ok=True)
+
+    def test_settings_remain_reachable_at_150_percent_scaling(self) -> None:
+        class SilentTts:
+            @staticmethod
+            def list_voices() -> list[object]:
+                return []
+
+        path = Path(__file__).resolve().parent / "work" / "ui_scale_test.json"
+        path.unlink(missing_ok=True)
+        root = __import__("tkinter").Tk()
+        root.attributes("-alpha", 0.0)
+        root.tk.call("tk", "scaling", 144 / 72)
+        try:
+            store = ConfigStore(path)
+            store.load()
+            ui = SettingsUI(root, store, SilentTts(), lambda: None, lambda: None, lambda: None, lambda *_: None)
+            root.update()
+            ui.notebook.select(2)
+            root.update_idletasks()
+            region = ui.settings_canvas.bbox("all")
+            self.assertIsNotNone(region)
+            self.assertGreater(region[3], ui.settings_canvas.winfo_height())
+            ui.settings_canvas.yview_moveto(1.0)
+            root.update_idletasks()
+            canvas_top = ui.settings_canvas.winfo_rooty()
+            canvas_bottom = canvas_top + ui.settings_canvas.winfo_height()
+            button_top = ui.apply_shortcuts_button.winfo_rooty()
+            button_bottom = button_top + ui.apply_shortcuts_button.winfo_height()
+            self.assertGreaterEqual(button_top, canvas_top)
+            self.assertLessEqual(button_bottom, canvas_bottom)
         finally:
             root.destroy()
             path.unlink(missing_ok=True)
@@ -299,12 +379,47 @@ class WindowsComponentTests(unittest.TestCase):
         except OSError:
             font = ImageFont.load_default()
         draw.text((20, 45), "Native OCR Test 123", fill="black", font=font)
+        engine = OcrEngine()
         try:
-            recognised = OcrEngine().recognise(image)
+            recognised = engine.recognise(image)
         except OcrError as exc:
             self.fail(f"Windows Media OCR did not complete: {exc}")
+        finally:
+            engine.close()
         self.assertIsInstance(recognised, str)
         self.assertTrue(recognised.strip(), "Windows OCR returned no text for the generated test image")
+
+    def test_ocr_session_is_reused_across_repeated_captures(self) -> None:
+        created = 0
+
+        class Session:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.closed = 0
+
+            def recognise(self, _image: object) -> dict[str, str]:
+                self.calls += 1
+                return {"text": f"Result {self.calls}"}
+
+            def close(self) -> None:
+                self.closed += 1
+
+        session = Session()
+
+        def factory(_language: str) -> Session:
+            nonlocal created
+            created += 1
+            return session
+
+        engine = OcrEngine(session_factory=factory)
+        image = Image.new("RGB", (20, 20), "white")
+        engine.warm_up()
+        self.assertEqual(engine.recognise(image), "Result 1")
+        self.assertEqual(engine.recognise(image), "Result 2")
+        engine.close()
+
+        self.assertEqual(created, 1)
+        self.assertEqual(session.closed, 1)
 
     def test_tts_playback_through_default_speakers(self) -> None:
         engine = TtsEngine()

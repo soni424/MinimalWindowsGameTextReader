@@ -4,3 +4,5 @@ work/
 config.json
 ocr_debug.log*
 .venv/
+build/
+dist/

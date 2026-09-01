@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import threading
 from pathlib import Path
@@ -24,9 +25,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "rate": 0,
     "volume": 100,
     "fixed_box": None,
+    "window": {
+        "width": 980,
+        "height": 860,
+        "x": None,
+        "y": None,
+        "state": "normal",
+    },
+    "capture_profiles": [
+        {
+            "id": "default",
+            "name": "Default",
+            "capture_area": None,
+            "settings": {},
+        }
+    ],
+    "selected_profile_id": "default",
     "hotkeys": {
         "fixed": "Alt+Z",
         "snippet": "Alt+S",
+        "read_again": "",
     },
     "ocr": {
         "enabled": True,
@@ -41,6 +59,8 @@ MAX_REPLACEMENT_RULES = 250
 MAX_PROTECTED_WORDS = 500
 MAX_TERM_LENGTH = 200
 MAX_REPLACEMENT_LENGTH = 500
+MAX_CAPTURE_PROFILES = 100
+MAX_PROFILE_NAME_LENGTH = 80
 
 
 def _nonempty_string(value: Any, default: str, maximum: int) -> str:
@@ -136,6 +156,123 @@ def _normalise_box(value: Any) -> list[int] | None:
     return [left, top, right, bottom]
 
 
+def _normalise_optional_coordinate(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        coordinate = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(-100_000, min(100_000, coordinate))
+
+
+def _normalise_window(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, Mapping) else {}
+    state = raw.get("state", DEFAULT_CONFIG["window"]["state"])
+    state = state.strip().lower() if isinstance(state, str) else "normal"
+    if state not in {"normal", "maximized"}:
+        state = "normal"
+    return {
+        "width": _clamp_int(raw.get("width"), 480, 10_000, DEFAULT_CONFIG["window"]["width"]),
+        "height": _clamp_int(raw.get("height"), 420, 10_000, DEFAULT_CONFIG["window"]["height"]),
+        "x": _normalise_optional_coordinate(raw.get("x")),
+        "y": _normalise_optional_coordinate(raw.get("y")),
+        "state": state,
+    }
+
+
+def _normalise_relative_box(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        left, top, right, bottom = (float(part) for part in value)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(part) and -10.0 <= part <= 10.0 for part in (left, top, right, bottom)):
+        return None
+    if right <= left or bottom <= top:
+        return None
+    return [left, top, right, bottom]
+
+
+def _normalise_capture_area(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    box = _normalise_box(value.get("box"))
+    if box is None:
+        return None
+    device = value.get("monitor_device", "")
+    device = device.strip()[:260] if isinstance(device, str) else ""
+    bounds = _normalise_box(value.get("monitor_bounds"))
+    dpi = value.get("monitor_dpi")
+    if isinstance(dpi, (list, tuple)) and len(dpi) == 2:
+        dpi_value = [
+            _clamp_int(dpi[0], 48, 960, 96),
+            _clamp_int(dpi[1], 48, 960, 96),
+        ]
+    else:
+        dpi_value = None
+    relative = _normalise_relative_box(value.get("relative_box"))
+    if not device or bounds is None or relative is None:
+        device, bounds, dpi_value, relative = "", None, None, None
+    return {
+        "box": box,
+        "monitor_device": device,
+        "monitor_bounds": bounds,
+        "monitor_dpi": dpi_value,
+        "relative_box": relative,
+    }
+
+
+def _normalise_profiles(value: Any, legacy_box: list[int] | None) -> list[dict[str, Any]]:
+    raw_profiles = value if isinstance(value, (list, tuple)) else []
+    profiles: list[dict[str, Any]] = []
+    identifiers: set[str] = set()
+    names: set[str] = set()
+    for index, raw_profile in enumerate(raw_profiles[:MAX_CAPTURE_PROFILES]):
+        if not isinstance(raw_profile, Mapping):
+            continue
+        identifier = raw_profile.get("id")
+        identifier = identifier.strip()[:80] if isinstance(identifier, str) else ""
+        if not identifier or identifier in identifiers:
+            continue
+        requested_name = raw_profile.get("name")
+        name = requested_name.strip()[:MAX_PROFILE_NAME_LENGTH] if isinstance(requested_name, str) else ""
+        if not name:
+            name = f"Profile {index + 1}"
+        base_name = name
+        suffix = 2
+        while name.casefold() in names:
+            name = f"{base_name[:MAX_PROFILE_NAME_LENGTH - len(str(suffix)) - 3]} ({suffix})"
+            suffix += 1
+        raw_area = raw_profile.get("capture_area")
+        if raw_area is None and raw_profile.get("box") is not None:
+            raw_area = {"box": raw_profile.get("box")}
+        settings = raw_profile.get("settings")
+        profiles.append(
+            {
+                "id": identifier,
+                "name": name,
+                "capture_area": _normalise_capture_area(raw_area),
+                # Reserved for future per-profile OCR/TTS settings. Unknown
+                # values are deliberately not activated by this release.
+                "settings": copy.deepcopy(dict(settings)) if isinstance(settings, Mapping) else {},
+            }
+        )
+        identifiers.add(identifier)
+        names.add(name.casefold())
+    if not profiles:
+        profiles.append(
+            {
+                "id": "default",
+                "name": "Default",
+                "capture_area": _normalise_capture_area({"box": legacy_box}) if legacy_box else None,
+                "settings": {},
+            }
+        )
+    return profiles
+
+
 def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     """Merge *raw* with defaults and normalise every persisted setting."""
     raw = raw if isinstance(raw, Mapping) else {}
@@ -145,15 +282,30 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     strength = strength.strip().lower() if isinstance(strength, str) else DEFAULT_CONFIG["ocr"]["strength"]
     if strength not in {"conservative", "balanced", "strong"}:
         strength = DEFAULT_CONFIG["ocr"]["strength"]
+    legacy_box = _normalise_box(raw.get("fixed_box"))
+    profiles = _normalise_profiles(raw.get("capture_profiles"), legacy_box)
+    selected_profile_id = raw.get("selected_profile_id")
+    selected_profile_id = selected_profile_id.strip()[:80] if isinstance(selected_profile_id, str) else ""
+    if selected_profile_id not in {profile["id"] for profile in profiles}:
+        selected_profile_id = profiles[0]["id"]
+    selected_profile = next(profile for profile in profiles if profile["id"] == selected_profile_id)
+    selected_area = selected_profile.get("capture_area")
+    compatible_box = selected_area.get("box") if isinstance(selected_area, Mapping) else None
     return {
         "theme": _normalise_theme(raw.get("theme")),
         "voice": _nonempty_string(raw.get("voice"), DEFAULT_CONFIG["voice"], 1024),
         "rate": _clamp_int(raw.get("rate"), -10, 10, DEFAULT_CONFIG["rate"]),
         "volume": _clamp_int(raw.get("volume"), 0, 100, DEFAULT_CONFIG["volume"]),
-        "fixed_box": _normalise_box(raw.get("fixed_box")),
+        # Keep the legacy key as a compatibility mirror while profiles remain
+        # the authoritative capture-area model.
+        "fixed_box": compatible_box,
+        "window": _normalise_window(raw.get("window")),
+        "capture_profiles": profiles,
+        "selected_profile_id": selected_profile_id,
         "hotkeys": {
             "fixed": _hotkey_string(raw_hotkeys.get("fixed"), DEFAULT_CONFIG["hotkeys"]["fixed"]),
             "snippet": _hotkey_string(raw_hotkeys.get("snippet"), DEFAULT_CONFIG["hotkeys"]["snippet"]),
+            "read_again": _hotkey_string(raw_hotkeys.get("read_again"), DEFAULT_CONFIG["hotkeys"]["read_again"]),
         },
         "ocr": {
             "enabled": _normalise_bool(raw_ocr.get("enabled"), DEFAULT_CONFIG["ocr"]["enabled"]),
@@ -222,4 +374,23 @@ class ConfigStore:
                     updated[key].update(value)
                 else:
                     updated[key] = value
+            # Older callers still update ``fixed_box`` directly. Mirror that
+            # operation into the selected profile so upgrades remain lossless.
+            if "fixed_box" in changes and "capture_profiles" not in changes:
+                box = _normalise_box(changes.get("fixed_box"))
+                selected_id = updated.get("selected_profile_id")
+                for profile in updated.get("capture_profiles", []):
+                    if profile.get("id") == selected_id:
+                        profile["capture_area"] = (
+                            {
+                                "box": box,
+                                "monitor_device": "",
+                                "monitor_bounds": None,
+                                "monitor_dpi": None,
+                                "relative_box": None,
+                            }
+                            if box
+                            else None
+                        )
+                        break
             return self.save(updated)

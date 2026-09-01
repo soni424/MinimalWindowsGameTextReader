@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Mapping
-from typing import Final
+from typing import Callable, Final, Protocol
 
 from PIL import Image
 
@@ -13,13 +14,95 @@ class OcrError(RuntimeError):
     """Raised when the Windows Media OCR API cannot process an image."""
 
 
+class _OcrSession(Protocol):
+    def recognise(self, image: Image.Image) -> object: ...
+
+    def close(self) -> None: ...
+
+
+class _WinOcrSession:
+    """One Windows Media OCR engine and event loop retained by the OCR worker."""
+
+    def __init__(self, language: str) -> None:
+        try:
+            import winocr
+        except ImportError as exc:
+            raise OcrError("winocr is not installed. Install the app requirements first.") from exc
+        language_value = winocr.Language(language)
+        if not winocr.OcrEngine.is_language_supported(language_value):
+            raise OcrError(f"Windows OCR language {language!r} is not installed.")
+        engine = winocr.OcrEngine.try_create_from_language(language_value)
+        if engine is None:
+            raise OcrError(f"Windows could not initialize OCR language {language!r}.")
+        self._module = winocr
+        self._engine = engine
+        self._loop = asyncio.new_event_loop()
+
+    def recognise(self, image: Image.Image) -> object:
+        module = self._module
+        prepared = image if image.mode == "RGBA" else image.convert("RGBA")
+        writer = module.DataWriter()
+        bitmap = None
+        try:
+            writer.write_bytes(prepared.tobytes())
+            buffer = writer.detach_buffer()
+            bitmap = module.SoftwareBitmap.create_copy_from_buffer(
+                buffer,
+                module.BitmapPixelFormat.RGBA8,
+                prepared.width,
+                prepared.height,
+            )
+            operation = self._engine.recognize_async(bitmap)
+            # Keep the native result object: extracting its ``text`` property is
+            # faster and smaller than recursively serializing every word/box.
+            return self._loop.run_until_complete(module.to_coroutine(operation))
+        finally:
+            if bitmap is not None and hasattr(bitmap, "close"):
+                try:
+                    bitmap.close()
+                except Exception:
+                    pass
+            if hasattr(writer, "close"):
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+
+    def close(self) -> None:
+        if not self._loop.is_closed():
+            self._loop.close()
+
+
 class OcrEngine:
     """Recognise text from Pillow images through Windows' Media OCR API."""
 
     DEFAULT_LANGUAGE: Final[str] = "en"
 
-    def __init__(self, language: str = DEFAULT_LANGUAGE) -> None:
+    def __init__(
+        self,
+        language: str = DEFAULT_LANGUAGE,
+        *,
+        session_factory: Callable[[str], _OcrSession] | None = None,
+    ) -> None:
         self.language = language
+        self._session_factory = session_factory or _WinOcrSession
+        self._session: _OcrSession | None = None
+
+    def _get_session(self) -> _OcrSession:
+        if self._session is None:
+            self._session = self._session_factory(self.language)
+        return self._session
+
+    def warm_up(self) -> None:
+        """Create the native OCR engine on its persistent worker before first use."""
+        self._get_session()
+
+    def close(self) -> None:
+        if self._session is not None:
+            try:
+                self._session.close()
+            finally:
+                self._session = None
 
     @staticmethod
     def clean_text(text: object) -> str:
@@ -94,14 +177,9 @@ class OcrEngine:
         if image.width < 1 or image.height < 1:
             return ""
         try:
-            import winocr
-
-            # Windows OCR accepts RGB/RGBA image data.  Converting palette and
-            # grayscale captures avoids a WinRT bitmap conversion failure.
-            prepared = image.convert("RGB") if image.mode not in {"RGB", "RGBA"} else image
-            result = winocr.recognize_pil_sync(prepared, lang=self.language)
-        except ImportError as exc:
-            raise OcrError("winocr is not installed. Install the app requirements first.") from exc
+            result = self._get_session().recognise(image)
+        except OcrError:
+            raise
         except Exception as exc:
             raise OcrError(f"Windows OCR failed: {exc}") from exc
         return self.clean_text(self._result_text(result))

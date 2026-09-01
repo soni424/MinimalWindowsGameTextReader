@@ -7,6 +7,8 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable
 
+from appearance import flush_windows_compositor
+
 
 @dataclass(frozen=True)
 class VirtualScreen:
@@ -282,8 +284,10 @@ class QuickSnippetOverlay(_ScreenOverlay):
         screen_left, screen_top = self.canvas_to_screen(left, top)
         screen_right, screen_bottom = self.canvas_to_screen(right, bottom)
         self.close()
-        # Let Windows repaint the underlying game before ImageGrab runs.
-        self.master.after(140, lambda: self._on_capture([screen_left, screen_top, screen_right, screen_bottom]))
+        # DwmFlush synchronizes with the actual overlay removal, avoiding both
+        # overlay pixels and a fixed guess-based delay before every OCR job.
+        flush_windows_compositor()
+        self.master.after_idle(lambda: self._on_capture([screen_left, screen_top, screen_right, screen_bottom]))
 
     def cancel(self) -> None:
         """Dismiss the selector without capturing any screen content."""

@@ -102,12 +102,26 @@ def resolve_theme(preference: str) -> ThemePalette:
     return DARK if system_uses_dark_mode() else LIGHT
 
 
-def apply_windows_title_bar(root: object, dark: bool) -> None:
-    """Best-effort dark title bar on supported Windows 10/11 builds."""
+def flush_windows_compositor() -> None:
+    """Wait until pending Desktop Window Manager changes are presented."""
+    try:
+        ctypes.windll.dwmapi.DwmFlush()
+    except Exception:
+        pass
+
+
+def apply_windows_title_bar(root: object, dark: bool) -> bool:
+    """Apply and repaint the real Windows frame after Tk has created its HWND."""
     try:
         root.update_idletasks()
-        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        user32 = ctypes.windll.user32
+        hwnd = int(user32.GetParent(root.winfo_id()))
+        if not hwnd:
+            hwnd = int(root.winfo_id())
+        if not hwnd:
+            return False
         enabled = ctypes.c_int(1 if dark else 0)
+        applied = False
         for attribute in (20, 19):
             result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd,
@@ -116,6 +130,16 @@ def apply_windows_title_bar(root: object, dark: bool) -> None:
                 ctypes.sizeof(enabled),
             )
             if result == 0:
+                applied = True
                 break
+        if not applied:
+            return False
+        # Force the non-client frame to repaint now, instead of waiting for a
+        # later manual theme change to make the DWM attribute visible.
+        flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020  # NOSIZE/NOMOVE/NOZORDER/NOACTIVATE/FRAMECHANGED
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, flags)
+        user32.RedrawWindow(hwnd, None, None, 0x0001 | 0x0100 | 0x0400)
+        flush_windows_compositor()
+        return True
     except Exception:
-        pass
+        return False

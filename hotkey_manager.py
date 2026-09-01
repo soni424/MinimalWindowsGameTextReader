@@ -190,14 +190,19 @@ class _NativeHotkeyThread(threading.Thread):
 class HotkeyManager:
     """Own Windows hotkey registrations and replace them without leaking hooks."""
 
-    def __init__(self, on_fixed: Callable[[], None], on_snippet: Callable[[], None]) -> None:
-        self._callbacks = (on_fixed, on_snippet)
+    def __init__(
+        self,
+        on_fixed: Callable[[], None],
+        on_snippet: Callable[[], None],
+        on_read_again: Callable[[], None] | None = None,
+    ) -> None:
+        self._callbacks = (on_fixed, on_snippet, on_read_again or (lambda: None))
         self._listener: _NativeHotkeyThread | None = None
-        self._bindings: tuple[_ParsedHotkey | None, _ParsedHotkey | None] = (None, None)
+        self._bindings: tuple[_ParsedHotkey | None, ...] = (None, None, None)
         self._lock = threading.RLock()
         self.is_running = False
 
-    def _start(self, parsed_bindings: tuple[_ParsedHotkey | None, _ParsedHotkey | None]) -> None:
+    def _start(self, parsed_bindings: tuple[_ParsedHotkey | None, ...]) -> None:
         active = {
             index + 1: (parsed, self._callbacks[index])
             for index, parsed in enumerate(parsed_bindings)
@@ -222,11 +227,23 @@ class HotkeyManager:
 
     def apply(self, fixed: str, snippet: str) -> tuple[str, str]:
         """Validate and register zero, one, or two shortcuts; empty means disabled."""
-        fixed_key = _parse_hotkey(fixed, allow_empty=True)
-        snippet_key = _parse_hotkey(snippet, allow_empty=True)
-        if fixed_key and snippet_key and fixed_key.display == snippet_key.display:
-            raise HotkeyError("Read Fixed Box and Select a Snippet cannot use the same shortcut.")
-        requested = (fixed_key, snippet_key)
+        fixed_key, snippet_key, _read_again_key = self._apply_values(fixed, snippet, "")
+        return fixed_key, snippet_key
+
+    def apply_all(self, fixed: str, snippet: str, read_again: str) -> tuple[str, str, str]:
+        """Validate and register all supported shortcuts as one atomic set."""
+        return self._apply_values(fixed, snippet, read_again)
+
+    def _apply_values(self, fixed: str, snippet: str, read_again: str) -> tuple[str, str, str]:
+        parsed = (
+            _parse_hotkey(fixed, allow_empty=True),
+            _parse_hotkey(snippet, allow_empty=True),
+            _parse_hotkey(read_again, allow_empty=True),
+        )
+        active = [item.display for item in parsed if item is not None]
+        if len(set(active)) != len(active):
+            raise HotkeyError("Read Fixed Box, Select a Snippet, and Read Again must use different shortcuts.")
+        requested = parsed
         with self._lock:
             previous = self._bindings
             self.stop()
@@ -239,7 +256,7 @@ class HotkeyManager:
                     self._listener = None
                     self.is_running = False
                 raise
-        return fixed_key.display if fixed_key else "", snippet_key.display if snippet_key else ""
+        return tuple(item.display if item else "" for item in parsed)  # type: ignore[return-value]
 
     def stop(self) -> None:
         """Unregister all shortcuts and stop the native Windows message loop."""
