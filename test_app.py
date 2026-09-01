@@ -416,6 +416,93 @@ class WindowsComponentTests(unittest.TestCase):
         self.assertEqual(ui.root.calls, 0)
         self.assertEqual(ui._voice_results.get_nowait(), [])
 
+    def test_combobox_popdowns_follow_palette_for_all_interaction_states(self) -> None:
+        import tkinter as tk
+        from tkinter import ttk
+
+        root = tk.Tk()
+        root.attributes("-alpha", 0.0)
+        try:
+            ui = SettingsUI.__new__(SettingsUI)
+            ui.root = root
+            ui.style = ttk.Style(root)
+            ui.style.theme_use("clam")
+            ui._comboboxes = []
+            ui._palette = DARK
+            ui._configure_styles(DARK)
+            container = ttk.Frame(root)
+            container.pack(fill="x")
+            for values in (("System", "Dark", "Light"), ("Default", "Persona 3 Reload"), ("Conservative", "Balanced", "Strong"), ("Microsoft David", "Microsoft Zira")):
+                combo = ui._register_combobox(ttk.Combobox(container, values=values, state="readonly"))
+                combo.current(0)
+                combo.pack(fill="x")
+            root.update()
+
+            def descendants(widget: tk.Misc) -> list[tk.Misc]:
+                children: list[tk.Misc] = []
+                for child in widget.winfo_children():
+                    children.append(child)
+                    children.extend(descendants(child))
+                return children
+
+            combos = [widget for widget in descendants(root) if isinstance(widget, ttk.Combobox)]
+            self.assertGreaterEqual(len(combos), 3)
+
+            for palette in (DARK, LIGHT):
+                ui._palette = palette
+                ui._configure_styles(palette)
+                ui._apply_tk_colours(palette)
+                root.update()
+                self.assertEqual(
+                    ui.style.lookup("TCombobox", "background", state=("active",)),
+                    palette.button_hover,
+                )
+                self.assertEqual(
+                    ui.style.lookup("TCombobox", "background", state=("pressed",)),
+                    palette.button_hover,
+                )
+                self.assertEqual(
+                    ui.style.lookup("TCombobox", "background", state=("disabled",)),
+                    palette.card_alt,
+                )
+                self.assertEqual(
+                    ui.style.lookup("TCombobox", "arrowcolor", state=("disabled",)),
+                    palette.muted,
+                )
+                self.assertEqual(ui.style.lookup("ComboboxPopdownFrame", "background"), palette.input)
+                self.assertEqual(ui.style.lookup("Vertical.TScrollbar", "background"), palette.button)
+                self.assertEqual(ui.style.lookup("Vertical.TScrollbar", "troughcolor"), palette.input)
+                self.assertEqual(ui.style.lookup("Vertical.TScrollbar", "lightcolor"), palette.button)
+
+                for combo in combos:
+                    root.tk.call("ttk::combobox::Post", combo._w)
+                    root.update()
+                    popdown = root.tk.call("ttk::combobox::PopdownWindow", combo._w)
+                    listbox = f"{popdown}.f.l"
+                    self.assertEqual(root.tk.call(listbox, "cget", "-background"), palette.input)
+                    self.assertEqual(root.tk.call(listbox, "cget", "-foreground"), palette.text)
+                    self.assertEqual(root.tk.call(listbox, "cget", "-selectbackground"), palette.selection)
+                    self.assertEqual(root.tk.call(listbox, "cget", "-selectforeground"), palette.text)
+                    self.assertEqual(root.tk.call(listbox, "cget", "-highlightbackground"), palette.border)
+                    self.assertEqual(root.tk.call(listbox, "cget", "-highlightcolor"), palette.accent)
+                    root.tk.call("ttk::combobox::Unpost", combo._w)
+
+            # Existing popdowns are refreshed immediately when the palette changes.
+            combo = combos[0]
+            ui._palette = DARK
+            ui._configure_styles(DARK)
+            root.tk.call("ttk::combobox::Post", combo._w)
+            root.update()
+            listbox = f"{root.tk.call('ttk::combobox::PopdownWindow', combo._w)}.f.l"
+            ui._palette = LIGHT
+            ui._configure_styles(LIGHT)
+            root.update()
+            self.assertEqual(root.tk.call(listbox, "cget", "-background"), LIGHT.input)
+            self.assertEqual(root.tk.call(listbox, "cget", "-selectbackground"), LIGHT.selection)
+            root.tk.call("ttk::combobox::Unpost", combo._w)
+        finally:
+            root.destroy()
+
     def test_settings_ui_builds_and_switches_theme(self) -> None:
         class SilentTts:
             @staticmethod

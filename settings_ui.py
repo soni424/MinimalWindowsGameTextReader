@@ -405,6 +405,7 @@ class SettingsUI:
         self._replacement_rules = list(ocr_settings["replacements"])
         self._protected_words = list(ocr_settings["protected_words"])
         self._last_result: CorrectionResult | None = None
+        self._comboboxes: list[ttk.Combobox] = []
         self._palette = resolve_theme(settings["theme"])
 
         self._configure_window()
@@ -433,6 +434,7 @@ class SettingsUI:
 
     def _configure_styles(self, palette: ThemePalette) -> None:
         """Apply semantic colours to every ttk style in one place."""
+        self._palette = palette
         style = self.style
         style.configure(".", background=palette.window, foreground=palette.text, font=("Segoe UI", 10))
         style.configure("App.TFrame", background=palette.window)
@@ -517,6 +519,45 @@ class SettingsUI:
                 bordercolor=[("focus", palette.accent)],
             )
 
+        # Clam leaves the arrow element on its light system colour while a
+        # combobox is hovered or pressed unless those states are mapped
+        # explicitly. Keep the field and arrow surfaces in the same palette
+        # for every interaction state, including disabled controls.
+        style.map(
+            "TCombobox",
+            background=[
+                ("disabled", palette.card_alt),
+                ("pressed", palette.button_hover),
+                ("active", palette.button_hover),
+                ("readonly", palette.input),
+                ("focus", palette.input),
+            ],
+            fieldbackground=[
+                ("disabled", palette.card_alt),
+                ("readonly", palette.input),
+                ("focus", palette.input),
+            ],
+            foreground=[
+                ("disabled", palette.muted),
+                ("readonly", palette.text),
+                ("focus", palette.text),
+            ],
+            arrowcolor=[
+                ("disabled", palette.muted),
+                ("pressed", palette.text),
+                ("active", palette.text),
+                ("readonly", palette.text),
+                ("focus", palette.text),
+            ],
+            bordercolor=[
+                ("disabled", palette.border),
+                ("focus", palette.accent),
+                ("active", palette.accent),
+            ],
+            selectbackground=[("focus", palette.selection)],
+            selectforeground=[("focus", palette.text)],
+        )
+
         style.configure("TScale", background=palette.card, troughcolor=palette.card_alt, bordercolor=palette.border)
         style.configure("TCheckbutton", background=palette.card, foreground=palette.text)
         style.map("TCheckbutton", background=[("active", palette.card)], foreground=[("disabled", palette.muted)])
@@ -550,12 +591,128 @@ class SettingsUI:
             troughcolor=palette.input,
             bordercolor=palette.border,
             arrowcolor=palette.text,
+            lightcolor=palette.button,
+            darkcolor=palette.border,
+        )
+        style.configure(
+            "TScrollbar",
+            background=palette.button,
+            troughcolor=palette.input,
+            bordercolor=palette.border,
+            arrowcolor=palette.text,
+            lightcolor=palette.button,
+            darkcolor=palette.border,
+        )
+        style.configure(
+            "Horizontal.TScrollbar",
+            background=palette.button,
+            troughcolor=palette.input,
+            bordercolor=palette.border,
+            arrowcolor=palette.text,
+            lightcolor=palette.button,
+            darkcolor=palette.border,
         )
 
-        self.root.option_add("*TCombobox*Listbox.background", palette.input)
-        self.root.option_add("*TCombobox*Listbox.foreground", palette.text)
-        self.root.option_add("*TCombobox*Listbox.selectBackground", palette.selection)
-        self.root.option_add("*TCombobox*Listbox.selectForeground", palette.text)
+        # The open list is a classic Tk Listbox created by ttk's combobox
+        # implementation, not another ttk widget. Style both the option
+        # database (for newly-created popdowns) and existing popdowns (for a
+        # live appearance switch).
+        style.configure(
+            "ComboboxPopdownFrame",
+            background=palette.input,
+            bordercolor=palette.border,
+            lightcolor=palette.border,
+            darkcolor=palette.border,
+            relief="solid",
+            borderwidth=1,
+        )
+        listbox_options = {
+            "background": palette.input,
+            "foreground": palette.text,
+            "selectBackground": palette.selection,
+            "selectForeground": palette.text,
+            "disabledForeground": palette.muted,
+            "highlightBackground": palette.border,
+            "highlightColor": palette.accent,
+            "highlightThickness": 1,
+            "borderWidth": 0,
+            "selectBorderWidth": 0,
+            "relief": "flat",
+            "font": "{Segoe UI} 10",
+        }
+        for pattern in ("*ComboboxPopdown*Listbox", "*TCombobox*Listbox", "*Combobox*Listbox"):
+            for option, value in listbox_options.items():
+                self.root.option_add(f"{pattern}.{option}", value)
+        self.root.option_add("*ComboboxPopdown.background", palette.input)
+        self._refresh_combobox_popdowns()
+
+    def _register_combobox(self, combo: ttk.Combobox) -> ttk.Combobox:
+        """Attach a palette refresh to a ttk combobox's native Tk popdown."""
+        if not hasattr(self, "_comboboxes"):
+            self._comboboxes = []
+        self._comboboxes.append(combo)
+        combo.configure(postcommand=lambda combo=combo: self._prepare_combobox_popdown(combo))
+        return combo
+
+    def _refresh_combobox_popdowns(self) -> None:
+        for combo in getattr(self, "_comboboxes", ()):
+            self._style_combobox_popdown(combo)
+
+    def _prepare_combobox_popdown(self, combo: ttk.Combobox) -> None:
+        """Create and style a popdown before ttk posts it for the first time."""
+        try:
+            self.root.tk.call("ttk::combobox::PopdownWindow", combo._w)
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            return
+        self._style_combobox_popdown(combo)
+
+    def _style_combobox_popdown(self, combo: ttk.Combobox) -> None:
+        """Apply the current palette to an already-created combobox list."""
+        try:
+            if not combo.winfo_exists():
+                return
+            popdown = f"{combo._w}.popdown"
+            if not int(self.root.tk.call("winfo", "exists", popdown)):
+                return
+            self.root.tk.call(
+                popdown,
+                "configure",
+                "-background",
+                self._palette.input,
+                "-highlightbackground",
+                self._palette.border,
+                "-highlightcolor",
+                self._palette.accent,
+                "-highlightthickness",
+                1,
+                "-borderwidth",
+                0,
+                "-relief",
+                "flat",
+            )
+            for frame in self.root.tk.call("winfo", "children", popdown):
+                for widget in self.root.tk.call("winfo", "children", frame):
+                    if self.root.tk.call("winfo", "class", widget) != "Listbox":
+                        continue
+                    options = (
+                        ("-background", self._palette.input),
+                        ("-foreground", self._palette.text),
+                        ("-selectbackground", self._palette.selection),
+                        ("-selectforeground", self._palette.text),
+                        ("-disabledforeground", self._palette.muted),
+                        ("-highlightbackground", self._palette.border),
+                        ("-highlightcolor", self._palette.accent),
+                        ("-highlightthickness", 1),
+                        ("-borderwidth", 0),
+                        ("-selectborderwidth", 0),
+                        ("-relief", "flat"),
+                    )
+                    for option, value in options:
+                        self.root.tk.call(widget, "configure", option, value)
+        except (AttributeError, tk.TclError, TypeError, ValueError):
+            # A popdown can disappear between the existence check and the
+            # configure call when the user closes it during a theme switch.
+            return
 
     def _build(self) -> None:
         outer = ttk.Frame(self.root, style="App.TFrame", padding=(18, 16, 18, 12))
@@ -572,12 +729,14 @@ class SettingsUI:
         appearance = ttk.Frame(header, style="Header.TFrame")
         appearance.grid(row=0, column=1, sticky="e")
         ttk.Label(appearance, text="Appearance", style="HeaderMeta.TLabel").pack(side="left", padx=(0, 7))
-        self.theme_combo = ttk.Combobox(
-            appearance,
-            textvariable=self.theme_value,
-            values=self.APPEARANCE_CHOICES,
-            state="readonly",
-            width=9,
+        self.theme_combo = self._register_combobox(
+            ttk.Combobox(
+                appearance,
+                textvariable=self.theme_value,
+                values=self.APPEARANCE_CHOICES,
+                state="readonly",
+                width=9,
+            )
         )
         self.theme_combo.pack(side="left")
         self.theme_combo.bind("<<ComboboxSelected>>", self._theme_changed)
@@ -652,7 +811,9 @@ class SettingsUI:
         profile_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         profile_row.columnconfigure(1, weight=1)
         ttk.Label(profile_row, text="Profile", style="CardText.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.profile_combo = ttk.Combobox(profile_row, textvariable=self.profile_value, state="readonly")
+        self.profile_combo = self._register_combobox(
+            ttk.Combobox(profile_row, textvariable=self.profile_value, state="readonly")
+        )
         self.profile_combo.grid(row=0, column=1, sticky="ew")
         self.profile_combo.bind("<<ComboboxSelected>>", self._profile_selected)
         profile_actions = ttk.Frame(profile_row, style="CardInner.TFrame")
@@ -702,7 +863,15 @@ class SettingsUI:
         ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(2, 10))
         ttk.Checkbutton(automatic, text="Correct OCR text before reading", variable=self.ocr_enabled, command=self.save_ocr_settings).grid(row=2, column=0, sticky="w")
         ttk.Label(automatic, text="Strength", style="CardText.TLabel").grid(row=2, column=1, sticky="e", padx=(18, 7))
-        strength = ttk.Combobox(automatic, textvariable=self.ocr_strength, values=("Conservative", "Balanced", "Strong"), state="readonly", width=14)
+        strength = self._register_combobox(
+            ttk.Combobox(
+                automatic,
+                textvariable=self.ocr_strength,
+                values=("Conservative", "Balanced", "Strong"),
+                state="readonly",
+                width=14,
+            )
+        )
         strength.grid(row=2, column=2, sticky="w")
         strength.bind("<<ComboboxSelected>>", lambda _event: self.save_ocr_settings())
         ttk.Checkbutton(automatic, text="Write correction debug log", variable=self.ocr_debug, command=self.save_ocr_settings).grid(row=2, column=3, sticky="e", padx=(14, 0))
@@ -759,7 +928,9 @@ class SettingsUI:
         ttk.Label(voice, text="Voice", style="CardTitle.TLabel").grid(row=0, column=0, columnspan=4, sticky="w")
         ttk.Label(voice, textvariable=self.voice_info, style="CardHint.TLabel").grid(row=1, column=0, columnspan=4, sticky="w", pady=(2, 10))
         ttk.Label(voice, text="Installed voice", style="CardText.TLabel").grid(row=2, column=0, sticky="w", pady=4)
-        self.voice_combo = ttk.Combobox(voice, textvariable=self.voice_value, state="readonly")
+        self.voice_combo = self._register_combobox(
+            ttk.Combobox(voice, textvariable=self.voice_value, state="readonly")
+        )
         self.voice_combo.grid(row=2, column=1, columnspan=3, sticky="ew", padx=(12, 0), pady=4)
         self.voice_combo.bind("<<ComboboxSelected>>", lambda _event: self._save_voice_settings())
 
