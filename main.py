@@ -24,6 +24,7 @@ from ocr_engine import OcrEngine, OcrError
 from overlay import BoxEditorOverlay, QuickSnippetOverlay
 from reader_state import ReaderTextState
 from settings_ui import SettingsUI
+from speech_text import format_for_speech
 from tray_app import TrayApp
 from tts_engine import TtsEngine
 
@@ -366,8 +367,9 @@ class GameTextReaderApplication:
 
     def read_again(self) -> None:
         """Replay the last corrected OCR text without another capture or correction."""
-        text = self.text_state.last_successful_text.strip()
-        if not text:
+        display_text = self.text_state.last_successful_text.strip()
+        spoken_text = format_for_speech(display_text)
+        if not spoken_text:
             self.ui.set_status("There is no successfully captured text to read again.", error=True)
             return
         settings = self.config.get()
@@ -377,7 +379,7 @@ class GameTextReaderApplication:
             with self._timing_lock:
                 self._pending_speech_timing = None
         replace = getattr(self.tts, "replace", None) or self.tts.speak
-        replace(text, settings["voice"], settings["rate"], settings["volume"])
+        replace(spoken_text, settings["voice"], settings["rate"], settings["volume"])
         self.ui.set_status("Reading the last captured text again.")
 
     def clear_text_history(self) -> None:
@@ -473,11 +475,12 @@ class GameTextReaderApplication:
 
         self._schedule(publish_result)
         final_text = result.corrected_text.strip()
-        if not final_text:
+        spoken_text = format_for_speech(final_text)
+        if not spoken_text:
             self._schedule(lambda: self.ui.set_status(f"{job.source}: no readable text found."))
             return
         with self._timing_lock:
-            self._pending_speech_timing = (final_text, timings)
+            self._pending_speech_timing = (spoken_text, timings)
         change_count = len(result.corrections)
         suffix = f" ({change_count} correction{'s' if change_count != 1 else ''})" if change_count else ""
         voice = str(settings.get("voice", ""))
@@ -495,13 +498,13 @@ class GameTextReaderApplication:
         self._schedule(lambda: self.ui.set_status(f"{job.source}: {speech_status}{suffix}."))
         if capture_mode == "replace":
             replace = getattr(self.tts, "replace", None) or self.tts.speak
-            replace(final_text, voice, rate, volume)
+            replace(spoken_text, voice, rate, volume)
         elif capture_mode == "overlap":
             overlap = getattr(self.tts, "overlap", None) or self.tts.speak
-            overlap(final_text, voice, rate, volume)
+            overlap(spoken_text, voice, rate, volume)
         else:
             enqueue = getattr(self.tts, "enqueue", None) or self.tts.speak
-            enqueue(final_text, voice, rate, volume)
+            enqueue(spoken_text, voice, rate, volume)
 
     def _capture_failed(self, job: CaptureJob, exc: Exception) -> None:
         message = str(exc) if isinstance(exc, OcrError) else f"{job.source} capture failed: {exc}"

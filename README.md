@@ -9,7 +9,7 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 - Reads a reusable fixed screen region or a one-time snippet selection.
 - Uses offline Windows OCR and installed Windows speech voices.
 - Conservatively corrects common game-font OCR mistakes while protecting fictional terminology.
-- Supports custom replacements and protected game-specific words.
+- Supports custom replacements, pronunciation previews, and protected game-specific words.
 - Provides configurable system-wide keyboard shortcuts.
 - Supports rapid dialogue reading with replace, queue, or optional overlapping voices.
 - Stores multiple capture profiles and remaps their regions after display changes.
@@ -62,6 +62,7 @@ The **OCR corrections** tab controls an offline post-processing stage. The origi
 - **Balanced** also uses a bundled English frequency dictionary to repair likely one-character mistakes, joined words, letter/digit confusions, and safe punctuation spacing. Its dictionary loads in the background.
 - **Strong** permits wider dictionary matches and is best used with protected terms.
 - Custom replacement rules run first. Each rule can be enabled separately and can match whole words, exact case, or any case.
+- The **▶ Play** button beside **Replace it with** previews that replacement using the selected voice, speed, and the same safe 60% preview-volume cap as **Test selected voice**. Previewing does not save or change the rule.
 - Protected terms keep character names, locations, item names, and game-specific vocabulary unchanged.
 - Select **Corrections** beside the latest result to compare raw and corrected text and see why every change was made.
 
@@ -73,10 +74,11 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 - Profile prompts, confirmation dialogs, combo boxes, and open drop-down lists follow the active appearance. Newly opened dialogs also follow appearance changes made while the app is running.
 - The **Reader** tab keeps the fixed box, latest OCR text, and copy controls together.
 - The **OCR corrections** tab contains correction strength, replacements, and protected game terms.
-- The **Voice & shortcuts** tab contains speech controls and global shortcut setup.
+- The **Voice & shortcuts** tab contains speech controls and global shortcut setup. On wide or maximized windows, the two cards use side-by-side columns; they stack automatically when the window is narrower.
 - **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
 - Speed and volume changes are saved automatically, including changes made with the sliders.
 - **Test selected voice** uses a 60% preview cap to avoid an unexpected blast; normal reads still use the saved volume.
+- OCR line layout is retained in displayed and copied text. For speech, ordinary wrapped lines remain continuous, while headings, visually separate blocks, and bullet items receive natural punctuation pauses; bullet symbols themselves are not spoken.
 - SAPI voice previews and readings use verified PCM metadata before MediaPlayer playback, preventing format-related distortion.
 - **New capture while speaking** defaults to replacing the current line immediately. Queue mode lets the current line finish first. **Allow overlapping lines** starts a new voice while the current one continues; the maximum number of simultaneous readings can be set from 2 to 4. Overlap is capped to keep audio resources bounded.
 - Window size, position, and normal/maximized state are restored. Capture and speech operations never write transient minimized geometry over that preference.

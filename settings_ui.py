@@ -210,9 +210,11 @@ class _ReplacementDialog:
         parent: tk.Misc,
         palette: ThemePalette,
         initial: dict[str, object] | None = None,
+        preview: Callable[[str], None] | None = None,
     ) -> None:
         initial = initial or {}
         self.palette = palette
+        self._preview = preview
         self.result: dict[str, object] | None = None
         self.window = tk.Toplevel(parent)
         self.window.withdraw()
@@ -233,20 +235,39 @@ class _ReplacementDialog:
         original_entry = ttk.Entry(frame, textvariable=self.original, width=38)
         original_entry.grid(row=0, column=1, sticky="ew", padx=(12, 0), pady=5)
         ttk.Label(frame, text="Replace it with").grid(row=1, column=0, sticky="w", pady=5)
-        ttk.Entry(frame, textvariable=self.replacement, width=38).grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=5)
+        replacement_entry = ttk.Entry(frame, textvariable=self.replacement, width=38)
+        replacement_entry.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=5)
+        self.play_button = ttk.Button(
+            frame,
+            text="▶ Play",
+            style="Compact.TButton",
+            command=self._play,
+        )
+        self.play_button.grid(row=1, column=2, sticky="e", padx=(8, 0), pady=5)
         checks = ttk.Frame(frame)
-        checks.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 4))
+        checks.grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 4))
         ttk.Checkbutton(checks, text="Enabled", variable=self.enabled).pack(side="left")
         ttk.Checkbutton(checks, text="Match whole words", variable=self.whole_word).pack(side="left", padx=(14, 0))
         ttk.Checkbutton(checks, text="Match exact case", variable=self.case_sensitive).pack(side="left", padx=(14, 0))
         actions = ttk.Frame(frame)
-        actions.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+        actions.grid(row=3, column=0, columnspan=3, sticky="e", pady=(14, 0))
         ttk.Button(actions, text="Cancel", command=self.window.destroy).pack(side="left")
         ttk.Button(actions, text="Save rule", style="Primary.TButton", command=self._save).pack(side="left", padx=(8, 0))
         self.window.bind("<Escape>", lambda _event: self.window.destroy())
         self.window.bind("<Return>", lambda _event: self._save())
         self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
+        self.replacement.trace_add("write", lambda *_args: self._update_play_state())
+        self._update_play_state()
         _show_modal(self.window, parent, original_entry)
+
+    def _update_play_state(self) -> None:
+        enabled = bool(self.replacement.get().strip()) and self._preview is not None
+        self.play_button.configure(state="normal" if enabled else "disabled")
+
+    def _play(self) -> None:
+        text = self.replacement.get().strip()
+        if text and self._preview is not None:
+            self._preview(text)
 
     def _save(self) -> None:
         original = self.original.get().strip()
@@ -948,8 +969,11 @@ class SettingsUI:
         self._refresh_protected_words()
 
     def _build_settings_tab(self, parent: ttk.Frame) -> None:
-        voice = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
-        voice.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        parent.columnconfigure(0, weight=1, uniform="settings-card")
+        parent.columnconfigure(1, weight=1, uniform="settings-card")
+        self._settings_layout_wide: bool | None = None
+        self.voice_card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
+        voice = self.voice_card
         voice.columnconfigure(1, weight=1)
         ttk.Label(voice, text="Voice", style="CardTitle.TLabel").grid(row=0, column=0, columnspan=4, sticky="w")
         ttk.Label(voice, textvariable=self.voice_info, style="CardHint.TLabel").grid(row=1, column=0, columnspan=4, sticky="w", pady=(2, 10))
@@ -1027,17 +1051,23 @@ class SettingsUI:
             voice,
             text="Replace is the clearest rapid mode; queue waits for the current line; overlap starts new voices immediately.",
             style="CardHint.TLabel",
-            wraplength=620,
+            wraplength=520,
             justify="left",
         ).grid(row=7, column=1, columnspan=3, sticky="w", padx=(12, 0), pady=(0, 4))
         ttk.Button(voice, text="Test selected voice", command=self.test_voice).grid(row=8, column=1, columnspan=3, sticky="e", pady=(10, 0))
         self._set_overlap_options_visible(self._capture_mode() == "overlap")
 
-        keys = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
-        keys.grid(row=1, column=0, sticky="ew")
+        self.shortcuts_card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
+        keys = self.shortcuts_card
         keys.columnconfigure(1, weight=1)
         ttk.Label(keys, text="Global shortcuts", style="CardTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(keys, text="Select Record, then press the exact combination you want. Windows will report conflicts.", style="CardHint.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 10))
+        ttk.Label(
+            keys,
+            text="Select Record, then press the exact combination you want. Windows will report conflicts.",
+            style="CardHint.TLabel",
+            wraplength=520,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 10))
 
         ttk.Label(keys, text="Read fixed box", style="CardText.TLabel").grid(row=2, column=0, sticky="w", pady=4)
         ttk.Entry(keys, textvariable=self.fixed_hotkey, width=22, state="readonly").grid(row=2, column=1, sticky="ew", padx=(12, 8), pady=4)
@@ -1061,6 +1091,43 @@ class SettingsUI:
         ttk.Button(again_actions, text="Clear", style="Compact.TButton", command=lambda: self.read_again_hotkey.set("")).pack(side="left", padx=(5, 0))
         self.apply_shortcuts_button = ttk.Button(keys, text="Apply shortcuts", style="Primary.TButton", command=self.apply_hotkeys)
         self.apply_shortcuts_button.grid(row=5, column=1, columnspan=2, sticky="e", pady=(10, 0))
+        parent.bind("<Configure>", self._settings_tab_resized, add="+")
+        self.root.after_idle(lambda: self._layout_settings_cards(parent.winfo_width()))
+
+    def _settings_tab_resized(self, event: tk.Event) -> None:
+        self._layout_settings_cards(int(event.width))
+
+    def _layout_settings_cards(self, width: int) -> None:
+        """Use the full tab width while keeping the controls usable on small screens."""
+        if not hasattr(self, "voice_card") or not hasattr(self, "shortcuts_card"):
+            return
+        try:
+            dpi_scale = max(1.0, float(self.root.winfo_fpixels("1i")) / 96.0)
+        except (tk.TclError, TypeError, ValueError):
+            dpi_scale = 1.0
+        wide = width >= round(1200 * dpi_scale)
+        if self._settings_layout_wide is wide:
+            return
+        self._settings_layout_wide = wide
+        self.voice_card.grid_forget()
+        self.shortcuts_card.grid_forget()
+        if wide:
+            self.voice_card.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+            self.shortcuts_card.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        else:
+            self.voice_card.grid(
+                row=0,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+                pady=(0, 10),
+            )
+            self.shortcuts_card.grid(
+                row=1,
+                column=0,
+                columnspan=2,
+                sticky="ew",
+            )
 
     def _apply_tk_colours(self, palette: ThemePalette) -> None:
         self.root.configure(bg=palette.window)
@@ -1136,7 +1203,11 @@ class SettingsUI:
             self.replacement_tree.selection_set(str(select_index))
 
     def add_replacement(self) -> None:
-        dialog = _ReplacementDialog(self.root, self._palette)
+        dialog = _ReplacementDialog(
+            self.root,
+            self._palette,
+            preview=lambda text: self._preview_speech(text, "replacement preview"),
+        )
         if dialog.result is None:
             return
         self._replacement_rules.append(dialog.result)
@@ -1147,7 +1218,12 @@ class SettingsUI:
         index = self._selected_replacement_index()
         if index is None:
             return
-        dialog = _ReplacementDialog(self.root, self._palette, self._replacement_rules[index])
+        dialog = _ReplacementDialog(
+            self.root,
+            self._palette,
+            self._replacement_rules[index],
+            preview=lambda text: self._preview_speech(text, "replacement preview"),
+        )
         if dialog.result is None:
             return
         self._replacement_rules[index] = dialog.result
@@ -1341,25 +1417,27 @@ class SettingsUI:
         self._save_voice_settings()
         self.on_quick_snippet()
 
-    def test_voice(self) -> None:
-        """Speak a short confirmation via the selected Windows voice."""
+    def _preview_speech(self, text: str, description: str) -> None:
+        """Play one safe, restartable sample through the selected voice."""
+        text = text.strip()
+        if not text:
+            return
         self._save_voice_settings()
         voice, rate, volume = self.speech_settings()
         preview_volume = min(volume, VOICE_PREVIEW_MAX_VOLUME)
         self.tts.stop()
-        self.tts.speak(
-            "This is your selected Windows voice.",
-            voice,
-            rate,
-            preview_volume,
-        )
+        self.tts.speak(text, voice, rate, preview_volume)
         if preview_volume < volume:
             self.set_status(
-                f"Playing a voice sample at {preview_volume}% preview volume; "
+                f"Playing {description} at {preview_volume}% preview volume; "
                 f"normal reads use {volume}%."
             )
         else:
-            self.set_status("Playing a voice sample…")
+            self.set_status(f"Playing {description}…")
+
+    def test_voice(self) -> None:
+        """Speak a short confirmation via the selected Windows voice."""
+        self._preview_speech("This is your selected Windows voice.", "a voice sample")
 
     def stop_speech(self) -> None:
         """Interrupt current speech and discard anything waiting behind it."""

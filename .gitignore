@@ -6,3 +6,4 @@ ocr_debug.log*
 .venv/
 build/
 dist/
+dist-update/

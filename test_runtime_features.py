@@ -354,7 +354,7 @@ class ReaderStateTests(unittest.TestCase):
         app.read_again()
 
         self.assertEqual(app.tts.stopped, 1)
-        self.assertEqual(app.tts.spoken, [("Final corrected dialogue", "voice", 2, 88)])
+        self.assertEqual(app.tts.spoken, [("Final corrected dialogue.", "voice", 2, 88)])
 
 
 class ApplicationSpeechRoutingTests(unittest.TestCase):
@@ -409,7 +409,7 @@ class ApplicationSpeechRoutingTests(unittest.TestCase):
             CorrectionResult("First", "First", (), 0.0),
             PipelineTimings(time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter()),
         )
-        self.assertEqual(calls, [("queue", "First", 2, 88)])
+        self.assertEqual(calls, [("queue", "First.", 2, 88)])
 
     def test_capture_result_can_replace_the_current_line_without_stopping_audio(self) -> None:
         app, calls = self._make_app("replace")
@@ -419,7 +419,7 @@ class ApplicationSpeechRoutingTests(unittest.TestCase):
             CorrectionResult("Next", "Next", (), 0.0),
             PipelineTimings(time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter()),
         )
-        self.assertEqual(calls, [("replace", "Next", 2, 88)])
+        self.assertEqual(calls, [("replace", "Next.", 2, 88)])
 
 
 class SpeechResourceTests(unittest.TestCase):

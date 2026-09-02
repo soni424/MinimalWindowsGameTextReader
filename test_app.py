@@ -632,10 +632,76 @@ class WindowsComponentTests(unittest.TestCase):
         ui.set_status = statuses.append
 
         ui.test_voice()
+        ui._preview_speech("Naytibas", "replacement preview")
 
         self.assertEqual(calls[0], ("stop",))
         self.assertEqual(calls[1], ("This is your selected Windows voice.", "sapi:test", 0, 60))
+        self.assertEqual(calls[2], ("stop",))
+        self.assertEqual(calls[3], ("Naytibas", "sapi:test", 0, 60))
         self.assertIn("preview volume", statuses[0])
+        self.assertIn("replacement preview", statuses[1])
+
+    def test_replacement_preview_uses_only_unsaved_replacement_text(self) -> None:
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        previews: list[str] = []
+        try:
+            with patch.object(settings_ui_module, "_show_modal", lambda *_args: None):
+                dialog = settings_ui_module._ReplacementDialog(
+                    root,
+                    DARK,
+                    {"original": "Stupei", "replacement": "Stupey"},
+                    previews.append,
+                )
+            root.update_idletasks()
+
+            self.assertFalse(dialog.play_button.instate(["disabled"]))
+            dialog._play()
+            dialog.replacement.set("Naytibas")
+            dialog._play()
+
+            self.assertEqual(previews, ["Stupey", "Naytibas"])
+            self.assertIsNone(dialog.result)
+
+            dialog.replacement.set("   ")
+            root.update_idletasks()
+            self.assertTrue(dialog.play_button.instate(["disabled"]))
+            dialog.window.destroy()
+        finally:
+            root.destroy()
+
+    def test_voice_and_shortcuts_cards_reflow_at_dpi_adjusted_breakpoint(self) -> None:
+        class SilentTts:
+            @staticmethod
+            def list_voices() -> list[object]:
+                return []
+
+        path = Path(__file__).resolve().parent / "work" / "ui_reflow_test.json"
+        path.unlink(missing_ok=True)
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        try:
+            store = ConfigStore(path)
+            store.load()
+            ui = SettingsUI(root, store, SilentTts(), lambda: None, lambda: None, lambda: None, lambda *_: None)
+            root.update_idletasks()
+            breakpoint = round(1200 * max(1.0, root.winfo_fpixels("1i") / 96.0))
+
+            ui._layout_settings_cards(breakpoint - 1)
+            self.assertEqual(int(ui.voice_card.grid_info()["row"]), 0)
+            self.assertEqual(int(ui.shortcuts_card.grid_info()["row"]), 1)
+            self.assertEqual(int(ui.voice_card.grid_info()["columnspan"]), 2)
+
+            ui._layout_settings_cards(breakpoint + 1)
+            self.assertEqual(int(ui.voice_card.grid_info()["column"]), 0)
+            self.assertEqual(int(ui.shortcuts_card.grid_info()["column"]), 1)
+            self.assertEqual(int(ui.shortcuts_card.grid_info()["row"]), 0)
+
+            ui._layout_settings_cards(breakpoint - 1)
+            self.assertEqual(int(ui.shortcuts_card.grid_info()["row"]), 1)
+        finally:
+            root.destroy()
+            path.unlink(missing_ok=True)
 
     def test_stop_interrupts_current_speech_request(self) -> None:
         class InterruptibleTts(TtsEngine):

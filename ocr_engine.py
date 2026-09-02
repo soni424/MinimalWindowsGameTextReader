@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Mapping
+from statistics import median
 from typing import Callable, Final, Protocol
 
 from PIL import Image
@@ -109,12 +110,110 @@ class OcrEngine:
         """Normalise whitespace while retaining intentional OCR line boundaries."""
         if text is None:
             return ""
-        lines = []
+        lines: list[str] = []
+        pending_blank = False
         for line in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
             compact = re.sub(r"[\t \f\v]+", " ", line).strip()
             if compact:
+                if pending_blank and lines:
+                    lines.append("")
                 lines.append(compact)
+                pending_blank = False
+            elif lines:
+                pending_blank = True
         return "\n".join(lines)
+
+    @staticmethod
+    def _value(item: object, name: str) -> object | None:
+        return item.get(name) if isinstance(item, Mapping) else getattr(item, name, None)
+
+    @staticmethod
+    def _items(value: object | None) -> list[object]:
+        if value is None or isinstance(value, (str, bytes, bytearray, Mapping)):
+            return []
+        try:
+            return list(value)  # type: ignore[arg-type]
+        except TypeError:
+            return []
+
+    @classmethod
+    def _rect(cls, value: object | None) -> tuple[float, float, float, float] | None:
+        if value is None:
+            return None
+        try:
+            x = float(cls._value(value, "x"))
+            y = float(cls._value(value, "y"))
+            width = float(cls._value(value, "width"))
+            height = float(cls._value(value, "height"))
+        except (TypeError, ValueError):
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        return x, y, width, height
+
+    @classmethod
+    def _line_details(
+        cls, line: object
+    ) -> tuple[str, tuple[float, float, float, float] | None]:
+        line_text = cls._value(line, "text")
+        words = cls._value(line, "words")
+        word_items = cls._items(words)
+        if not isinstance(line_text, str):
+            word_text = [cls._value(word, "text") for word in word_items]
+            line_text = " ".join(word for word in word_text if isinstance(word, str))
+
+        rects = [
+            rect
+            for rect in (
+                cls._rect(cls._value(word, "bounding_rect")) for word in word_items
+            )
+            if rect is not None
+        ]
+        if not rects:
+            direct = cls._rect(cls._value(line, "bounding_rect"))
+            return str(line_text or ""), direct
+
+        left = min(rect[0] for rect in rects)
+        top = min(rect[1] for rect in rects)
+        right = max(rect[0] + rect[2] for rect in rects)
+        bottom = max(rect[1] + rect[3] for rect in rects)
+        return str(line_text or ""), (left, top, right - left, bottom - top)
+
+    @staticmethod
+    def _block_breaks(
+        details: list[tuple[str, tuple[float, float, float, float] | None]],
+    ) -> set[int]:
+        """Return line indexes after which the visual gap starts a new block."""
+
+        heights = [bounds[3] for _text, bounds in details if bounds is not None]
+        if not heights:
+            return set()
+        typical_height = float(median(heights))
+        measured_gaps: list[float] = []
+        pair_gaps: dict[int, float] = {}
+        for index, ((_text, current), (_next_text, following)) in enumerate(
+            zip(details, details[1:])
+        ):
+            if current is None or following is None:
+                continue
+            gap = following[1] - (current[1] + current[3])
+            if gap < 0:
+                continue
+            measured_gaps.append(gap)
+            pair_gaps[index] = gap
+        if not measured_gaps:
+            return set()
+
+        if len(measured_gaps) <= 2:
+            threshold = max(12.0, typical_height * 1.75)
+        else:
+            typical_gap = float(median(measured_gaps))
+            threshold = max(
+                12.0,
+                typical_height * 1.5,
+                typical_gap + typical_height * 0.5,
+            )
+        return {index for index, gap in pair_gaps.items() if gap >= threshold}
 
     @classmethod
     def _result_text(cls, result: object) -> str:
@@ -129,41 +228,22 @@ class OcrEngine:
         if isinstance(result, str):
             return result
 
-        if isinstance(result, Mapping):
-            text = result.get("text")
-            if isinstance(text, str):
-                return text
-            lines = result.get("lines")
-        else:
-            text = getattr(result, "text", None)
-            if isinstance(text, str):
-                return text
-            lines = getattr(result, "lines", None)
+        text = cls._value(result, "text")
+        lines = cls._value(result, "lines")
+        line_items = cls._items(lines)
+        if line_items:
+            details = [cls._line_details(line) for line in line_items]
+            details = [(line, bounds) for line, bounds in details if line.strip()]
+            if details:
+                breaks = cls._block_breaks(details)
+                parts: list[str] = []
+                for index, (line, _bounds) in enumerate(details):
+                    parts.append(line)
+                    if index < len(details) - 1:
+                        parts.append("\n\n" if index in breaks else "\n")
+                return "".join(parts)
 
-        if not isinstance(lines, (list, tuple)):
-            return ""
-
-        extracted_lines: list[str] = []
-        for line in lines:
-            if isinstance(line, Mapping):
-                line_text = line.get("text")
-                words = line.get("words")
-            else:
-                line_text = getattr(line, "text", None)
-                words = getattr(line, "words", None)
-
-            if isinstance(line_text, str):
-                extracted_lines.append(line_text)
-                continue
-
-            if isinstance(words, (list, tuple)):
-                word_text = [
-                    word.get("text") if isinstance(word, Mapping) else getattr(word, "text", None)
-                    for word in words
-                ]
-                extracted_lines.append(" ".join(word for word in word_text if isinstance(word, str)))
-
-        return "\n".join(extracted_lines)
+        return text if isinstance(text, str) else ""
 
     def recognise(self, image: Image.Image) -> str:
         """Return Windows OCR text for a Pillow image.
