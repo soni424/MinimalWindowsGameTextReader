@@ -28,6 +28,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "capture_mode": "replace",
         "max_overlap": 2,
     },
+    "startup": {
+        "enabled": False,
+    },
     "fixed_box": None,
     "window": {
         "width": 980,
@@ -283,6 +286,7 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     raw_hotkeys = raw.get("hotkeys") if isinstance(raw.get("hotkeys"), Mapping) else {}
     raw_ocr = raw.get("ocr") if isinstance(raw.get("ocr"), Mapping) else {}
     raw_speech = raw.get("speech") if isinstance(raw.get("speech"), Mapping) else {}
+    raw_startup = raw.get("startup") if isinstance(raw.get("startup"), Mapping) else {}
     capture_mode = raw_speech.get("capture_mode", DEFAULT_CONFIG["speech"]["capture_mode"])
     capture_mode = capture_mode.strip().lower() if isinstance(capture_mode, str) else DEFAULT_CONFIG["speech"]["capture_mode"]
     if capture_mode not in {"queue", "replace", "overlap"}:
@@ -314,6 +318,11 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "speech": {
             "capture_mode": capture_mode,
             "max_overlap": max_overlap,
+        },
+        "startup": {
+            "enabled": _normalise_bool(
+                raw_startup.get("enabled"), DEFAULT_CONFIG["startup"]["enabled"]
+            ),
         },
         # Keep the legacy key as a compatibility mirror while profiles remain
         # the authoritative capture-area model.

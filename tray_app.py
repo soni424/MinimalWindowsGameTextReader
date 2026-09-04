@@ -42,8 +42,8 @@ class TrayApp:
         callback = self._callbacks[name]
         callback()
 
-    def start(self) -> None:
-        """Start pystray on its own loop without blocking Tk's event loop."""
+    def start(self) -> bool:
+        """Start pystray without blocking Tk and report whether it succeeded."""
         try:
             import pystray
 
@@ -72,9 +72,11 @@ class TrayApp:
                 ),
             )
             self._icon.run_detached()
+            return True
         except Exception:
             # The main app remains usable if a desktop policy blocks tray icons.
             self._icon = None
+            return False
 
     def stop(self) -> None:
         """Remove the icon before the process exits."""

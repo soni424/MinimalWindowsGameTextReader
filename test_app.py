@@ -10,6 +10,7 @@ import threading
 import unittest
 import ctypes
 import inspect
+import sys
 from pathlib import Path
 from queue import SimpleQueue
 from types import SimpleNamespace
@@ -28,7 +29,7 @@ from appearance import DARK, LIGHT, apply_windows_title_bar
 from config import ConfigStore, validate_config
 from hotkey_manager import HotkeyError, HotkeyManager, normalise_hotkey, to_pynput_hotkey
 from main import GameTextReaderApplication
-from ocr_correction import OcrCorrector
+from ocr_correction import CorrectionResult, OcrCorrector
 from ocr_engine import OcrEngine, OcrError
 from overlay import QuickSnippetOverlay
 from settings_ui import SettingsUI, _ShortcutRecorderDialog
@@ -60,6 +61,37 @@ class WindowsComponentTests(unittest.TestCase):
         self.assertIn('datas = [("assets", "assets")]', spec)
         self.assertIn('icon="assets/app_icon.ico"', spec)
         self.assertIn('manifest="assets/GameTextReader.manifest"', spec)
+
+    def test_tray_start_reports_success_and_failure(self) -> None:
+        class Menu:
+            SEPARATOR = object()
+
+            def __init__(self, *_items: object) -> None:
+                pass
+
+        class Icon:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def run_detached(self) -> None:
+                pass
+
+        fake_pystray = SimpleNamespace(
+            Icon=Icon,
+            Menu=Menu,
+            MenuItem=lambda *_args, **_kwargs: object(),
+        )
+        tray = TrayApp(lambda: None, lambda: None, lambda: None, lambda: None, lambda: None)
+        with patch.dict(sys.modules, {"pystray": fake_pystray}):
+            self.assertTrue(tray.start())
+
+        failing_pystray = SimpleNamespace(
+            Icon=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("blocked")),
+            Menu=Menu,
+            MenuItem=lambda *_args, **_kwargs: object(),
+        )
+        with patch.dict(sys.modules, {"pystray": failing_pystray}):
+            self.assertFalse(tray.start())
 
     def test_overlay_uses_one_exact_pane_per_monitor(self) -> None:
         from capture_profiles import MonitorInfo
@@ -345,6 +377,11 @@ class WindowsComponentTests(unittest.TestCase):
         self.assertEqual(validate_config({"theme": "dark"})["theme"], "dark")
         self.assertEqual(validate_config({"theme": "LIGHT"})["theme"], "light")
         self.assertEqual(validate_config({"theme": "neon"})["theme"], "system")
+
+    def test_startup_preference_is_backward_compatible_and_validated(self) -> None:
+        self.assertFalse(validate_config({})["startup"]["enabled"])
+        self.assertTrue(validate_config({"startup": {"enabled": True}})["startup"]["enabled"])
+        self.assertFalse(validate_config({"startup": {"enabled": "yes"}})["startup"]["enabled"])
 
     def test_read_again_shortcut_is_optional_and_persisted(self) -> None:
         self.assertEqual(validate_config({})["hotkeys"]["read_again"], "")
@@ -655,18 +692,96 @@ class WindowsComponentTests(unittest.TestCase):
                 )
             root.update_idletasks()
 
-            self.assertFalse(dialog.play_button.instate(["disabled"]))
-            dialog._play()
+            self.assertFalse(dialog.original_play_button.instate(["disabled"]))
+            self.assertFalse(dialog.replacement_play_button.instate(["disabled"]))
+            dialog._play_original()
+            dialog._play_replacement()
+            dialog.original.set("Noytibos")
             dialog.replacement.set("Naytibas")
-            dialog._play()
+            dialog._play_original()
+            dialog._play_replacement()
 
-            self.assertEqual(previews, ["Stupey", "Naytibas"])
+            self.assertEqual(previews, ["Stupei", "Stupey", "Noytibos", "Naytibas"])
             self.assertIsNone(dialog.result)
 
+            dialog.original.set("   ")
             dialog.replacement.set("   ")
             root.update_idletasks()
-            self.assertTrue(dialog.play_button.instate(["disabled"]))
+            self.assertTrue(dialog.original_play_button.instate(["disabled"]))
+            self.assertTrue(dialog.replacement_play_button.instate(["disabled"]))
             dialog.window.destroy()
+        finally:
+            root.destroy()
+
+    def test_typed_text_becomes_replayable_and_invalidates_ocr_details(self) -> None:
+        class SilentTts:
+            @staticmethod
+            def list_voices() -> list[object]:
+                return []
+
+        manual_text: list[str] = []
+        path = Path(__file__).resolve().parent / "work" / "ui_manual_text_test.json"
+        path.unlink(missing_ok=True)
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        try:
+            store = ConfigStore(path)
+            store.load()
+            ui = SettingsUI(
+                root,
+                store,
+                SilentTts(),
+                lambda: None,
+                lambda: None,
+                lambda: None,
+                lambda *_: None,
+                on_manual_text_changed=manual_text.append,
+            )
+            ui.set_last_result(CorrectionResult("Raw", "Corrected", (), 0.0))
+            self.assertFalse(ui.details_button.instate(["disabled"]))
+
+            ui.captured_text.insert("end", " plus typed text")
+            root.update()
+
+            self.assertEqual(manual_text[-1], "Corrected plus typed text")
+            self.assertFalse(ui.read_again_button.instate(["disabled"]))
+            self.assertTrue(ui.details_button.instate(["disabled"]))
+            self.assertIsNone(ui._last_result)
+            self.assertIn("Edited text", ui.capture_meta.get())
+
+            ui.captured_text.delete("1.0", "end")
+            root.update()
+            self.assertEqual(manual_text[-1], "")
+            self.assertTrue(ui.read_again_button.instate(["disabled"]))
+        finally:
+            root.destroy()
+            path.unlink(missing_ok=True)
+
+    def test_startup_checkbox_rolls_back_when_windows_rejects_the_change(self) -> None:
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        statuses: list[tuple[str, bool]] = []
+
+        class Alert:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def show(self) -> None:
+                pass
+
+        ui = SettingsUI.__new__(SettingsUI)
+        ui.root = root
+        ui._palette = DARK
+        ui.startup_enabled = __import__("tkinter").BooleanVar(root, value=True)
+        ui.on_startup_changed = lambda _enabled: (_ for _ in ()).throw(
+            RuntimeError("Startup access was blocked")
+        )
+        ui.set_status = lambda message, error=False: statuses.append((message, error))
+        try:
+            with patch.object(settings_ui_module, "_ThemedAlertDialog", Alert):
+                ui._startup_changed()
+            self.assertFalse(ui.startup_enabled.get())
+            self.assertEqual(statuses, [("Startup access was blocked", True)])
         finally:
             root.destroy()
 

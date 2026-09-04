@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import sys
 import threading
 import time
 import tkinter as tk
@@ -25,6 +26,11 @@ from overlay import BoxEditorOverlay, QuickSnippetOverlay
 from reader_state import ReaderTextState
 from settings_ui import SettingsUI
 from speech_text import format_for_speech
+from startup_registration import (
+    STARTUP_ARGUMENT,
+    StartupRegistration,
+    StartupRegistrationError,
+)
 from tray_app import TrayApp
 from tts_engine import TtsEngine
 
@@ -64,10 +70,19 @@ def set_windows_app_identity() -> None:
 class GameTextReaderApplication:
     """Coordinate GUI, tray, hotkeys, native OCR, and queued speech synthesis."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        start_hidden: bool = False,
+        startup_registration: StartupRegistration | None = None,
+    ) -> None:
         self.config = ConfigStore()
         settings = self.config.load()
+        self.startup_registration = startup_registration or StartupRegistration()
+        startup_error = self._reconcile_startup_registration(settings)
+        settings = self.config.get()
         self.root = tk.Tk()
+        if start_hidden:
+            self.root.withdraw()
         apply_window_icon(self.root)
         self._closed = False
         self._scheduled_actions: SimpleQueue[Callable[[], None]] = SimpleQueue()
@@ -113,6 +128,8 @@ class GameTextReaderApplication:
             on_shortcut_recording=self.set_shortcuts_paused,
             on_read_again=self.read_again,
             on_clear_text=self.clear_text_history,
+            on_manual_text_changed=self.accept_manual_text,
+            on_startup_changed=self.set_launch_at_startup,
             on_profile_create=self.create_capture_profile,
             on_profile_rename=self.rename_capture_profile,
             on_profile_delete=self.delete_capture_profile,
@@ -129,10 +146,43 @@ class GameTextReaderApplication:
         )
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_window)
         self._apply_initial_hotkeys()
-        self.tray.start()
+        tray_started = self.tray.start()
         self.root.after(20, self._drain_scheduled_actions)
         self.preload_correction_engine()
         self._refresh_profiles_ui()
+        self._apply_startup_visibility(start_hidden, tray_started, startup_error)
+
+    def _apply_startup_visibility(
+        self, start_hidden: bool, tray_started: bool, startup_error: str = ""
+    ) -> None:
+        """Keep sign-in launches hidden only when the tray can restore them."""
+
+        if startup_error:
+            self.ui.set_status(startup_error, error=True)
+        if start_hidden and tray_started:
+            # Run after the placement controller restores a saved maximized state.
+            self.root.after_idle(self.hide_window)
+        elif start_hidden:
+            self.root.deiconify()
+            self.ui.set_status(
+                "The tray icon could not start, so settings were opened instead.",
+                error=True,
+            )
+
+    def _reconcile_startup_registration(self, settings: dict[str, object]) -> str:
+        """Restore a configured Run entry and repair a moved executable path."""
+
+        configured = bool(settings.get("startup", {}).get("enabled", False))
+        try:
+            registered = self.startup_registration.is_enabled()
+            if configured:
+                self.startup_registration.set_enabled(True)
+            elif registered:
+                self.config.update(startup={"enabled": True})
+        except StartupRegistrationError as exc:
+            self.config.update(startup={"enabled": False})
+            return str(exc)
+        return ""
 
     def _schedule(self, callback: Callable[[], None]) -> None:
         """Queue work from hook, tray, and worker threads for Tk's main thread."""
@@ -382,6 +432,25 @@ class GameTextReaderApplication:
         replace(spoken_text, settings["voice"], settings["rate"], settings["volume"])
         self.ui.set_status("Reading the last captured text again.")
 
+    def accept_manual_text(self, text: str) -> None:
+        """Make the user's editor contents the authoritative Read Again text."""
+
+        self.text_state.accept_manual_text(text)
+
+    def set_launch_at_startup(self, enabled: bool) -> None:
+        """Apply Windows startup registration before persisting the preference."""
+
+        previous = bool(self.config.get().get("startup", {}).get("enabled", False))
+        self.startup_registration.set_enabled(enabled)
+        try:
+            self.config.update(startup={"enabled": bool(enabled)})
+        except Exception:
+            try:
+                self.startup_registration.set_enabled(previous)
+            except StartupRegistrationError:
+                pass
+            raise
+
     def clear_text_history(self) -> None:
         self.text_state.clear_history()
 
@@ -539,11 +608,12 @@ class GameTextReaderApplication:
             self.quit_app()
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Create and run the desktop application."""
+    arguments = sys.argv[1:] if argv is None else argv
     set_windows_app_identity()
     enable_dpi_awareness()
-    GameTextReaderApplication().run()
+    GameTextReaderApplication(start_hidden=STARTUP_ARGUMENT in arguments).run()
 
 
 if __name__ == "__main__":

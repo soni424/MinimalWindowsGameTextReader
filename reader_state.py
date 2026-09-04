@@ -26,10 +26,17 @@ class ReaderTextState:
             self.raw_ocr_text = result.raw_text
             self.corrected_ocr_text = result.corrected_text
             final_text = result.corrected_text.strip()
-            if final_text:
-                self.last_successful_text = final_text
-                return True
-            return False
+            self.last_successful_text = final_text
+            return bool(final_text)
+
+    def accept_manual_text(self, text: str) -> bool:
+        """Replace replay text with a user edit and invalidate stale OCR details."""
+
+        with self._lock:
+            self.raw_ocr_text = ""
+            self.corrected_ocr_text = ""
+            self.last_successful_text = text.strip()
+            return bool(self.last_successful_text)
 
     def begin_speech(self, text: str, request_id: int | None = None) -> None:
         with self._lock:

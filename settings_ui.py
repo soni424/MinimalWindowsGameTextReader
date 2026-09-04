@@ -234,16 +234,25 @@ class _ReplacementDialog:
         ttk.Label(frame, text="Text detected by OCR").grid(row=0, column=0, sticky="w", pady=5)
         original_entry = ttk.Entry(frame, textvariable=self.original, width=38)
         original_entry.grid(row=0, column=1, sticky="ew", padx=(12, 0), pady=5)
-        ttk.Label(frame, text="Replace it with").grid(row=1, column=0, sticky="w", pady=5)
-        replacement_entry = ttk.Entry(frame, textvariable=self.replacement, width=38)
-        replacement_entry.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=5)
-        self.play_button = ttk.Button(
+        self.original_play_button = ttk.Button(
             frame,
             text="▶ Play",
             style="Compact.TButton",
-            command=self._play,
+            command=self._play_original,
         )
-        self.play_button.grid(row=1, column=2, sticky="e", padx=(8, 0), pady=5)
+        self.original_play_button.grid(row=0, column=2, sticky="e", padx=(8, 0), pady=5)
+        ttk.Label(frame, text="Replace it with").grid(row=1, column=0, sticky="w", pady=5)
+        replacement_entry = ttk.Entry(frame, textvariable=self.replacement, width=38)
+        replacement_entry.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=5)
+        self.replacement_play_button = ttk.Button(
+            frame,
+            text="▶ Play",
+            style="Compact.TButton",
+            command=self._play_replacement,
+        )
+        self.replacement_play_button.grid(row=1, column=2, sticky="e", padx=(8, 0), pady=5)
+        # Retain the previous internal name for callers that customized the dialog.
+        self.play_button = self.replacement_play_button
         checks = ttk.Frame(frame)
         checks.grid(row=2, column=0, columnspan=3, sticky="w", pady=(10, 4))
         ttk.Checkbutton(checks, text="Enabled", variable=self.enabled).pack(side="left")
@@ -256,18 +265,34 @@ class _ReplacementDialog:
         self.window.bind("<Escape>", lambda _event: self.window.destroy())
         self.window.bind("<Return>", lambda _event: self._save())
         self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
-        self.replacement.trace_add("write", lambda *_args: self._update_play_state())
-        self._update_play_state()
+        self.original.trace_add("write", lambda *_args: self._update_play_states())
+        self.replacement.trace_add("write", lambda *_args: self._update_play_states())
+        self._update_play_states()
         _show_modal(self.window, parent, original_entry)
 
-    def _update_play_state(self) -> None:
-        enabled = bool(self.replacement.get().strip()) and self._preview is not None
-        self.play_button.configure(state="normal" if enabled else "disabled")
+    def _update_play_states(self) -> None:
+        callback_available = self._preview is not None
+        self.original_play_button.configure(
+            state="normal" if callback_available and self.original.get().strip() else "disabled"
+        )
+        self.replacement_play_button.configure(
+            state="normal" if callback_available and self.replacement.get().strip() else "disabled"
+        )
 
-    def _play(self) -> None:
-        text = self.replacement.get().strip()
+    def _preview_value(self, value: tk.StringVar) -> None:
+        text = value.get().strip()
         if text and self._preview is not None:
             self._preview(text)
+
+    def _play_original(self) -> None:
+        self._preview_value(self.original)
+
+    def _play_replacement(self) -> None:
+        self._preview_value(self.replacement)
+
+    def _play(self) -> None:
+        """Compatibility alias for the original replacement-field preview."""
+        self._play_replacement()
 
     def _save(self) -> None:
         original = self.original.get().strip()
@@ -387,6 +412,8 @@ class SettingsUI:
         on_shortcut_recording: Callable[[bool], None] | None = None,
         on_read_again: Callable[[], None] | None = None,
         on_clear_text: Callable[[], None] | None = None,
+        on_manual_text_changed: Callable[[str], None] | None = None,
+        on_startup_changed: Callable[[bool], None] | None = None,
         on_profile_create: Callable[[str], None] | None = None,
         on_profile_rename: Callable[[str, str], None] | None = None,
         on_profile_delete: Callable[[str], None] | None = None,
@@ -403,6 +430,8 @@ class SettingsUI:
         self.on_shortcut_recording = on_shortcut_recording or (lambda _active: None)
         self.on_read_again = on_read_again or (lambda: None)
         self.on_clear_text = on_clear_text or (lambda: None)
+        self.on_manual_text_changed = on_manual_text_changed or (lambda _text: None)
+        self.on_startup_changed = on_startup_changed or (lambda _enabled: None)
         self.on_profile_create = on_profile_create or (lambda _name: None)
         self.on_profile_rename = on_profile_rename or (lambda _profile_id, _name: None)
         self.on_profile_delete = on_profile_delete or (lambda _profile_id: None)
@@ -436,12 +465,17 @@ class SettingsUI:
         self.fixed_hotkey = tk.StringVar(value=settings["hotkeys"]["fixed"])
         self.snippet_hotkey = tk.StringVar(value=settings["hotkeys"]["snippet"])
         self.read_again_hotkey = tk.StringVar(value=settings["hotkeys"].get("read_again", ""))
+        self.startup_enabled = tk.BooleanVar(
+            value=bool(settings.get("startup", {}).get("enabled", False))
+        )
         self.theme_value = tk.StringVar(value=settings["theme"].title())
         self.profile_value = tk.StringVar()
         self._profile_id_by_name: dict[str, str] = {}
         self._profile_name_by_id: dict[str, str] = {}
         self.box_value = tk.StringVar()
-        self.capture_meta = tk.StringVar(value="Nothing captured yet")
+        self.capture_meta = tk.StringVar(
+            value="Type or paste text here, or capture text from the screen."
+        )
         self.voice_info = tk.StringVar(value="Discovering installed Windows voices…")
         self.status_value = tk.StringVar(value="Starting…")
         self.hotkey_status = tk.StringVar(value="Shortcuts starting")
@@ -452,6 +486,7 @@ class SettingsUI:
         self._replacement_rules = list(ocr_settings["replacements"])
         self._protected_words = list(ocr_settings["protected_words"])
         self._last_result: CorrectionResult | None = None
+        self._updating_captured_text = False
         self._comboboxes: list[ttk.Combobox] = []
         self._palette = resolve_theme(settings["theme"])
 
@@ -889,6 +924,8 @@ class SettingsUI:
             undo=False,
         )
         self.captured_text.grid(row=2, column=0, columnspan=2, sticky="nsew")
+        self.captured_text.bind("<<Modified>>", self._captured_text_modified)
+        self.captured_text.edit_modified(False)
         capture_actions = ttk.Frame(captured, style="CardInner.TFrame")
         capture_actions.grid(row=0, column=1, rowspan=2, sticky="e")
         self.read_again_button = ttk.Button(capture_actions, text="Read Again", style="Primary.TButton", command=self.on_read_again, state="disabled")
@@ -1091,6 +1128,26 @@ class SettingsUI:
         ttk.Button(again_actions, text="Clear", style="Compact.TButton", command=lambda: self.read_again_hotkey.set("")).pack(side="left", padx=(5, 0))
         self.apply_shortcuts_button = ttk.Button(keys, text="Apply shortcuts", style="Primary.TButton", command=self.apply_hotkeys)
         self.apply_shortcuts_button.grid(row=5, column=1, columnspan=2, sticky="e", pady=(10, 0))
+
+        ttk.Separator(keys).grid(
+            row=6, column=0, columnspan=3, sticky="ew", pady=(18, 12)
+        )
+        ttk.Label(keys, text="Windows startup", style="CardTitle.TLabel").grid(
+            row=7, column=0, columnspan=3, sticky="w"
+        )
+        ttk.Checkbutton(
+            keys,
+            text="Launch when I sign in to Windows",
+            variable=self.startup_enabled,
+            command=self._startup_changed,
+        ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 2))
+        ttk.Label(
+            keys,
+            text="Starts quietly in the system tray with global shortcuts ready.",
+            style="CardHint.TLabel",
+            wraplength=520,
+            justify="left",
+        ).grid(row=9, column=0, columnspan=3, sticky="w")
         parent.bind("<Configure>", self._settings_tab_resized, add="+")
         self.root.after_idle(lambda: self._layout_settings_cards(parent.winfo_width()))
 
@@ -1453,6 +1510,28 @@ class SettingsUI:
             self.set_status(str(exc), error=True)
             _ThemedAlertDialog(self.root, self._palette, "Could not apply shortcuts", str(exc)).show()
 
+    def _startup_changed(self) -> None:
+        """Apply the startup checkbox immediately and roll it back on failure."""
+
+        requested = bool(self.startup_enabled.get())
+        try:
+            self.on_startup_changed(requested)
+        except Exception as exc:
+            self.startup_enabled.set(not requested)
+            message = str(exc) or "Windows could not change the startup setting."
+            self.set_status(message, error=True)
+            _ThemedAlertDialog(
+                self.root,
+                self._palette,
+                "Could not change Windows startup",
+                message,
+            ).show()
+            return
+        if requested:
+            self.set_status("Game Text Reader will start in the tray when you sign in.")
+        else:
+            self.set_status("Game Text Reader will no longer start when you sign in.")
+
     def record_shortcut(self, target: tk.StringVar, title: str) -> None:
         """Open the chord recorder and place the captured value in its field."""
         self.on_shortcut_recording(True)
@@ -1564,13 +1643,50 @@ class SettingsUI:
         """Compatibility helper for showing an uncorrected OCR result."""
         self.set_last_result(CorrectionResult(text, text, (), 0.0))
 
+    def _replace_captured_text(self, text: str) -> None:
+        """Update the editor without treating an OCR/UI refresh as a user edit."""
+
+        self._updating_captured_text = True
+        try:
+            self.captured_text.delete("1.0", "end")
+            if text:
+                self.captured_text.insert("1.0", text)
+            self.captured_text.edit_modified(False)
+        finally:
+            self._updating_captured_text = False
+
+    def _captured_text_modified(self, _event: object | None = None) -> None:
+        """Promote typed or pasted editor contents to the current replay text."""
+
+        if not self.captured_text.edit_modified():
+            return
+        self.captured_text.edit_modified(False)
+        if self._updating_captured_text:
+            return
+
+        text = self.captured_text.get("1.0", "end-1c").strip()
+        self._last_result = None
+        if hasattr(self, "details_button"):
+            self.details_button.configure(state="disabled")
+        self.set_read_again_enabled(bool(text))
+        if text:
+            lines = len(text.splitlines())
+            self.capture_meta.set(
+                f"Edited text • {len(text)} characters • "
+                f"{lines} line{'s' if lines != 1 else ''}"
+            )
+        else:
+            self.capture_meta.set(
+                "Type or paste text here, or capture text from the screen."
+            )
+        self.on_manual_text_changed(text)
+
     def set_last_result(self, result: CorrectionResult) -> None:
         """Show corrected text while retaining raw OCR and the change trace."""
         self._last_result = result
         text = result.corrected_text
         clean = text.strip() if text else ""
-        self.captured_text.delete("1.0", "end")
-        self.captured_text.insert("1.0", clean or "No readable text was found in this area.")
+        self._replace_captured_text(clean)
         if clean:
             lines = len(clean.splitlines())
             changes = len(result.corrections)
@@ -1621,8 +1737,10 @@ class SettingsUI:
     def clear_text(self) -> None:
         self.on_clear_text()
         self._last_result = None
-        self.captured_text.delete("1.0", "end")
-        self.capture_meta.set("Nothing captured yet")
+        self._replace_captured_text("")
+        self.capture_meta.set(
+            "Type or paste text here, or capture text from the screen."
+        )
         if hasattr(self, "details_button"):
             self.details_button.configure(state="disabled")
         self.set_read_again_enabled(False)

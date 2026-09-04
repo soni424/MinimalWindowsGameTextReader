@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from capture_profiles import (
     CaptureProfileManager,
@@ -16,9 +17,11 @@ from capture_profiles import (
 )
 from capture_pipeline import CaptureJob, CaptureWorker, PipelineTimings
 from config import ConfigStore, validate_config
+import main as main_module
 from main import GameTextReaderApplication
 from ocr_correction import CorrectionResult
 from reader_state import ReaderTextState
+from startup_registration import StartupRegistrationError
 from tts_engine import TtsEngine
 from window_state import WindowPlacement, WindowStateController, restore_window_placement
 
@@ -308,6 +311,19 @@ class ReaderStateTests(unittest.TestCase):
         state.end_speech("In a second.")
         self.assertEqual(state.currently_spoken_text, "")
 
+    def test_manual_text_becomes_replay_text_and_invalidates_ocr_details(self) -> None:
+        state = ReaderTextState()
+        state.accept_success(CorrectionResult("Noytibos", "Naytibas", (), 0.1))
+
+        self.assertTrue(state.accept_manual_text("  Noytibos typed exactly  "))
+        self.assertEqual(state.last_successful_text, "Noytibos typed exactly")
+        self.assertEqual(state.raw_ocr_text, "")
+        self.assertEqual(state.corrected_ocr_text, "")
+        self.assertTrue(state.can_read_again)
+
+        self.assertFalse(state.accept_manual_text("  \n  "))
+        self.assertFalse(state.can_read_again)
+
     def test_old_speech_completion_cannot_clear_newer_identical_text(self) -> None:
         state = ReaderTextState()
         state.begin_speech("Same line", request_id=1)
@@ -355,6 +371,137 @@ class ReaderStateTests(unittest.TestCase):
 
         self.assertEqual(app.tts.stopped, 1)
         self.assertEqual(app.tts.spoken, [("Final corrected dialogue.", "voice", 2, 88)])
+
+    def test_read_again_speaks_manual_text_without_ocr_correction(self) -> None:
+        spoken: list[tuple[object, ...]] = []
+
+        class Tts:
+            def stop(self) -> None:
+                pass
+
+            def speak(self, *args: object) -> threading.Event:
+                spoken.append(args)
+                return threading.Event()
+
+        class Config:
+            @staticmethod
+            def get() -> dict[str, object]:
+                return {"voice": "voice", "rate": 1, "volume": 70}
+
+        class Ui:
+            def set_status(self, _message: str, error: bool = False) -> None:
+                pass
+
+        app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+        app.tts = Tts()
+        app.config = Config()
+        app.ui = Ui()
+        app.text_state = ReaderTextState()
+        app.text_state.accept_manual_text("Noytibos\nwrapped text")
+
+        app.read_again()
+
+        self.assertEqual(spoken, [("Noytibos wrapped text.", "voice", 1, 70)])
+
+
+class StartupFlowTests(unittest.TestCase):
+    def test_configured_startup_repairs_the_current_registration(self) -> None:
+        class Config:
+            def __init__(self) -> None:
+                self.data = {"startup": {"enabled": True}}
+
+            def get(self) -> dict[str, object]:
+                return self.data
+
+            def update(self, **changes: object) -> dict[str, object]:
+                self.data.update(changes)
+                return self.data
+
+        class Registration:
+            calls: list[bool] = []
+
+            def is_enabled(self) -> bool:
+                return False
+
+            def set_enabled(self, enabled: bool) -> None:
+                self.calls.append(enabled)
+
+        app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+        app.config = Config()
+        app.startup_registration = Registration()
+
+        self.assertEqual(app._reconcile_startup_registration(app.config.get()), "")
+        self.assertEqual(app.startup_registration.calls, [True])
+        self.assertTrue(app.config.get()["startup"]["enabled"])
+
+    def test_startup_registration_failure_rolls_back_the_preference(self) -> None:
+        class Config:
+            def __init__(self) -> None:
+                self.data = {"startup": {"enabled": True}}
+
+            def get(self) -> dict[str, object]:
+                return self.data
+
+            def update(self, **changes: object) -> dict[str, object]:
+                self.data.update(changes)
+                return self.data
+
+        class Registration:
+            def is_enabled(self) -> bool:
+                raise StartupRegistrationError("blocked by policy")
+
+        app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+        app.config = Config()
+        app.startup_registration = Registration()
+
+        error = app._reconcile_startup_registration(app.config.get())
+        self.assertEqual(error, "blocked by policy")
+        self.assertFalse(app.config.get()["startup"]["enabled"])
+
+    def test_hidden_startup_falls_back_to_visible_when_tray_fails(self) -> None:
+        callbacks: list[object] = []
+        statuses: list[tuple[str, bool]] = []
+
+        class Root:
+            deiconified = False
+
+            def after_idle(self, callback: object) -> None:
+                callbacks.append(callback)
+
+            def deiconify(self) -> None:
+                self.deiconified = True
+
+        class Ui:
+            def set_status(self, message: str, error: bool = False) -> None:
+                statuses.append((message, error))
+
+        app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+        app.root = Root()
+        app.ui = Ui()
+        app.hide_window = lambda: callbacks.append("hidden")
+
+        app._apply_startup_visibility(True, True)
+        self.assertEqual(len(callbacks), 1)
+        callbacks.pop()()
+        self.assertEqual(callbacks, ["hidden"])
+
+        app._apply_startup_visibility(True, False)
+        self.assertTrue(app.root.deiconified)
+        self.assertTrue(statuses[-1][1])
+
+    def test_startup_argument_only_hides_sign_in_launches(self) -> None:
+        with (
+            patch.object(main_module, "set_windows_app_identity"),
+            patch.object(main_module, "enable_dpi_awareness"),
+            patch.object(main_module, "GameTextReaderApplication") as application,
+        ):
+            main_module.main(["--startup"])
+            application.assert_called_once_with(start_hidden=True)
+            application.return_value.run.assert_called_once_with()
+
+            application.reset_mock()
+            main_module.main([])
+            application.assert_called_once_with(start_hidden=False)
 
 
 class ApplicationSpeechRoutingTests(unittest.TestCase):

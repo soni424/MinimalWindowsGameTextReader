@@ -7,10 +7,12 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 ## Highlights
 
 - Reads a reusable fixed screen region or a one-time snippet selection.
+- Reads text you type or paste into the editable result box.
 - Uses offline Windows OCR and installed Windows speech voices.
 - Conservatively corrects common game-font OCR mistakes while protecting fictional terminology.
 - Supports custom replacements, pronunciation previews, and protected game-specific words.
 - Provides configurable system-wide keyboard shortcuts.
+- Can start quietly in the system tray when you sign in to Windows.
 - Supports rapid dialogue reading with replace, queue, or optional overlapping voices.
 - Stores multiple capture profiles and remaps their regions after display changes.
 - Includes System, Dark, and Light appearances throughout the main interface, dialogs, and drop-down controls.
@@ -50,7 +52,7 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 2. In **Capture area**, create or select a game profile, select **Set capture area**, then drag inside the outlined area to move it or drag an edge/handle to resize it. Press **Enter** to save or **Esc** to cancel.
 3. Press the Fixed Box hotkey (default `Alt+Z`) to OCR and read the selected profile's area.
 4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
-5. Select **Read Again** to replay the last successful corrected result without another screenshot, OCR pass, or correction pass.
+5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
 
 Capture profiles can be created, renamed, deleted, and switched without a profile limit imposed by the UI. Each region stores its Windows display identity, original display bounds/DPI, absolute coordinates, and monitor-relative coordinates. Resolution, scaling, and arrangement changes are remapped on the same display; if that display is disconnected, the app asks you to edit/select an area instead of moving it onto an unrelated screen.
 
@@ -62,7 +64,7 @@ The **OCR corrections** tab controls an offline post-processing stage. The origi
 - **Balanced** also uses a bundled English frequency dictionary to repair likely one-character mistakes, joined words, letter/digit confusions, and safe punctuation spacing. Its dictionary loads in the background.
 - **Strong** permits wider dictionary matches and is best used with protected terms.
 - Custom replacement rules run first. Each rule can be enabled separately and can match whole words, exact case, or any case.
-- The **▶ Play** button beside **Replace it with** previews that replacement using the selected voice, speed, and the same safe 60% preview-volume cap as **Test selected voice**. Previewing does not save or change the rule.
+- The **▶ Play** buttons beside **Text detected by OCR** and **Replace it with** preview either field using the selected voice, speed, and the same safe 60% preview-volume cap as **Test selected voice**. Previewing does not save or change the rule.
 - Protected terms keep character names, locations, item names, and game-specific vocabulary unchanged.
 - Select **Corrections** beside the latest result to compare raw and corrected text and see why every change was made.
 
@@ -75,6 +77,7 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 - The **Reader** tab keeps the fixed box, latest OCR text, and copy controls together.
 - The **OCR corrections** tab contains correction strength, replacements, and protected game terms.
 - The **Voice & shortcuts** tab contains speech controls and global shortcut setup. On wide or maximized windows, the two cards use side-by-side columns; they stack automatically when the window is narrower.
+- Enable **Launch when I sign in to Windows** in that tab to start quietly in the system tray with global shortcuts ready. It applies to the current Windows account and does not require administrator access.
 - **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
 - Speed and volume changes are saved automatically, including changes made with the sliders.
 - **Test selected voice** uses a 60% preview cap to avoid an unexpected blast; normal reads still use the saved volume.
@@ -89,7 +92,7 @@ Choose **Record** beside Read Fixed Box, Select a Snippet, or the optional Read 
 
 Windows OCR, its event loop, SAPI voice tokens/player, and WinRT synthesizer/media player remain alive on their dedicated workers for repeated dialogue captures. When OCR debug logging is enabled, the same rotating log includes measured dispatch, capture, OCR, correction, and speech-start timings.
 
-Settings persist in `config.json` next to the application.
+Settings persist in `config.json` next to the application. Manually typed reading text is temporary and is not restored after restarting. Windows organization policies or disabling the app in Windows **Startup Apps** can override its launch-at-sign-in preference.
 
 ## Troubleshooting audio bursts
 
@@ -115,7 +118,7 @@ The packaged application is created in `dist/GameTextReader`.
 python -m unittest discover -v
 ```
 
-The test suite verifies correction, profile migration/CRUD/display mapping, window restoration and DPI layout, Read Again isolation, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
+The test suite verifies correction, profile migration/CRUD/display mapping, window restoration and DPI layout, editable Read Again text, pronunciation previews, Windows startup registration, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
 
 ## App icon assets
 
