@@ -17,6 +17,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
+from speech_text import SpeechDocument, SpeechWordSpan
+
 
 # Import pywin32's COM module before any speech worker is started.  Loading the
 # extension lazily from the worker can trigger pywin32 finalizers on the wrong
@@ -48,6 +50,17 @@ class _PlaybackChannel:
     failed: threading.Event = field(default_factory=threading.Event)
     error: str = ""
     retired: bool = False
+    word_timings: tuple["_WordTiming", ...] = ()
+    next_word_timing: int = 0
+
+
+@dataclass(frozen=True)
+class _WordTiming:
+    """One backend word boundary positioned on the generated audio timeline."""
+
+    seconds: float
+    spoken_start: int
+    spoken_end: int
 
 
 class TtsError(RuntimeError):
@@ -76,6 +89,29 @@ class _SpeechRequest:
     completion: threading.Event | None = None
     error: Exception | None = None
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
+    source_text: str = ""
+    word_spans: tuple[SpeechWordSpan, ...] = ()
+
+
+class _SapiWordEventSink:
+    """Collect SAPI boundaries while speech is rendered into memory."""
+
+    def __init__(self) -> None:
+        self.word_boundaries: list[tuple[int, int, int]] = []
+
+    def OnWord(
+        self,
+        _stream_number: int,
+        stream_position: object,
+        character_position: int,
+        length: int,
+    ) -> None:
+        try:
+            self.word_boundaries.append(
+                (int(stream_position), int(character_position), int(length))
+            )
+        except (TypeError, ValueError):
+            return
 
 
 class SpeechTicket(threading.Event):
@@ -150,6 +186,7 @@ class _WindowsSpeechSession:
         self._selected_winrt_voice = ""
         self._active_backend = ""
         self._winrt_deadline = 0.0
+        self._sapi_word_timings: tuple[_WordTiming, ...] = ()
 
     def prepare(self, voice_id: str) -> None:
         # All playback uses MediaPlayer. SAPI is only a synthesizer for SAPI
@@ -320,7 +357,9 @@ class _WindowsSpeechSession:
         try:
             import win32com.client
 
-            speaker = win32com.client.Dispatch("SAPI.SpVoice")
+            speaker = win32com.client.DispatchWithEvents(
+                "SAPI.SpVoice", _SapiWordEventSink
+            )
         except ImportError as exc:
             raise TtsError("pywin32/SAPI5 is not available on this Windows installation.") from exc
         except Exception as exc:
@@ -356,6 +395,7 @@ class _WindowsSpeechSession:
         audio_format = None
         wave_format = None
         raw = b""
+        self._sapi_word_timings = ()
         try:
             import win32com.client
 
@@ -373,10 +413,36 @@ class _WindowsSpeechSession:
             speaker.Rate = request.rate
             speaker.Volume = request.volume
             speaker.AudioOutputStream = memory_stream
+            if hasattr(speaker, "word_boundaries"):
+                speaker.word_boundaries.clear()
+            try:
+                # SPEI_WORD_BOUNDARY.  Preserve all interests the selected
+                # voice already requested.
+                speaker.EventInterests = int(speaker.EventInterests) | 0x20
+            except Exception:
+                pass
             # Synchronous synthesis is intentional: it writes to memory and
             # never touches the physical audio endpoint.
             speaker.Speak(request.text, 0)
+            if _PYTHONCOM is not None:
+                try:
+                    _PYTHONCOM.PumpWaitingMessages()
+                except Exception:
+                    pass
             raw = bytes(memory_stream.GetData())
+            bytes_per_second = sample_rate * channels * (bits_per_sample // 8)
+            if bytes_per_second > 0:
+                self._sapi_word_timings = tuple(
+                    _WordTiming(
+                        max(0.0, stream_position / bytes_per_second),
+                        max(0, character_position),
+                        max(0, character_position + length),
+                    )
+                    for stream_position, character_position, length in getattr(
+                        speaker, "word_boundaries", ()
+                    )
+                    if length > 0
+                )
         except Exception as exc:
             raise TtsError(f"Windows SAPI speech synthesis failed: {exc}") from exc
         finally:
@@ -422,6 +488,10 @@ class _WindowsSpeechSession:
 
         self._winrt_synthesizer = SpeechSynthesizer()
         self._winrt_voice_type = SpeechSynthesizer
+        try:
+            self._winrt_synthesizer.options.include_word_boundary_metadata = True
+        except Exception:
+            pass
 
     def _select_winrt_voice(self, native_id: str) -> None:
         if native_id == self._selected_winrt_voice:
@@ -488,6 +558,7 @@ class _WindowsSpeechSession:
         on_started: Callable[[], None],
         replace: bool,
         duration_seconds: float,
+        word_timings: tuple[_WordTiming, ...] = (),
     ) -> None:
         self._ensure_winrt()
         self._close_retired_channels()
@@ -496,6 +567,7 @@ class _WindowsSpeechSession:
         self._retire_current_channel()
         channel = self._new_playback_channel()
         channel.stream = stream
+        channel.word_timings = word_timings
         self._winrt_current_channel = channel
         self._winrt_player = channel.player
         try:
@@ -510,6 +582,55 @@ class _WindowsSpeechSession:
         self._active_backend = "winrt"
         self._winrt_deadline = time.monotonic() + max(0.75, duration_seconds + 1.0)
         on_started()
+
+    @staticmethod
+    def _winrt_word_timings(stream: object) -> tuple[_WordTiming, ...]:
+        """Read optional Windows speech-word cues without risking playback."""
+
+        try:
+            from winrt.windows.media.core import SpeechCue
+
+            timings: list[_WordTiming] = []
+            for track in stream.timed_metadata_tracks:
+                if str(getattr(track, "id", "")) != "SpeechWord":
+                    continue
+                for raw_cue in track.cues:
+                    cue = raw_cue.as_(SpeechCue)
+                    start = getattr(cue, "start_position_in_input", None)
+                    end = getattr(cue, "end_position_in_input", None)
+                    if start is None or end is None:
+                        continue
+                    timings.append(
+                        _WordTiming(
+                            max(0.0, cue.start_time.total_seconds()),
+                            max(0, int(start)),
+                            max(0, int(end) + 1),
+                        )
+                    )
+            return tuple(sorted(timings, key=lambda item: item.seconds))
+        except Exception:
+            return ()
+
+    def drain_word_events(self) -> tuple[tuple[int, int], ...]:
+        """Return the newest word crossed by the active playback position."""
+
+        channel = self._winrt_current_channel
+        if channel is None or not channel.word_timings:
+            return ()
+        try:
+            position = channel.player.playback_session.position.total_seconds()
+        except Exception:
+            return ()
+        newest: _WordTiming | None = None
+        while channel.next_word_timing < len(channel.word_timings):
+            timing = channel.word_timings[channel.next_word_timing]
+            if timing.seconds > position + 0.015:
+                break
+            newest = timing
+            channel.next_word_timing += 1
+        if newest is None:
+            return ()
+        return ((newest.spoken_start, newest.spoken_end),)
 
     def _start_winrt(
         self,
@@ -530,7 +651,13 @@ class _WindowsSpeechSession:
                 self._close_stream(stream)
                 return
             duration = max(0.5, len(request.text.split()) / 2.2)
-            self._start_stream(stream, on_started, replace, duration)
+            self._start_stream(
+                stream,
+                on_started,
+                replace,
+                duration,
+                self._winrt_word_timings(stream),
+            )
         except TtsError:
             raise
         except Exception as exc:
@@ -550,7 +677,13 @@ class _WindowsSpeechSession:
             frame_rate = max(1, wav_file.getframerate())
             duration = max(0.4, wav_file.getnframes() / frame_rate)
         try:
-            self._start_stream(stream, on_started, replace, duration)
+            self._start_stream(
+                stream,
+                on_started,
+                replace,
+                duration,
+                self._sapi_word_timings,
+            )
         except Exception:
             self._close_stream(stream)
             raise
@@ -597,6 +730,8 @@ class TtsEngine:
         on_finished: Callable[[str], None] | None = None,
         on_started_with_id: Callable[[int, str, float], None] | None = None,
         on_finished_with_id: Callable[[int, str], None] | None = None,
+        on_document_started_with_id: Callable[[int, str], None] | None = None,
+        on_word_with_id: Callable[[int, str, int, int], None] | None = None,
         initial_voice_id: str = "",
         initial_capture_mode: str = DEFAULT_CAPTURE_MODE,
         initial_max_overlap: int = DEFAULT_MAX_OVERLAP,
@@ -607,6 +742,8 @@ class TtsEngine:
         self._on_finished = on_finished
         self._on_started_with_id = on_started_with_id
         self._on_finished_with_id = on_finished_with_id
+        self._on_document_started_with_id = on_document_started_with_id
+        self._on_word_with_id = on_word_with_id
         self._initial_voice_id = initial_voice_id
         self._session_factory = session_factory or _WindowsSpeechSession
         self._requests: queue.Queue[_SpeechCommand | None] = queue.Queue(maxsize=128)
@@ -727,14 +864,21 @@ class TtsEngine:
 
     def _submit(
         self,
-        text: str,
+        text: str | SpeechDocument,
         voice_id: str,
         rate: int,
         volume: int,
         *,
         mode: str,
     ) -> SpeechTicket:
-        clean = " ".join(str(text).split())
+        if isinstance(text, SpeechDocument):
+            clean = text.spoken_text.strip()
+            source_text = text.source_text
+            word_spans = text.words
+        else:
+            clean = " ".join(str(text).split())
+            source_text = ""
+            word_spans = ()
         with self._current_lock:
             self._next_request_id += 1
             request_id = self._next_request_id
@@ -754,6 +898,8 @@ class TtsEngine:
             mode=_normalise_mode(mode),
             generation=generation,
             completion=done,
+            source_text=source_text,
+            word_spans=word_spans,
         )
         if self._shutdown.is_set():
             request.cancel.set()
@@ -771,7 +917,7 @@ class TtsEngine:
 
     def speak(
         self,
-        text: str,
+        text: str | SpeechDocument,
         voice_id: str = "",
         rate: int = 0,
         volume: int = 100,
@@ -781,7 +927,7 @@ class TtsEngine:
 
     def enqueue(
         self,
-        text: str,
+        text: str | SpeechDocument,
         voice_id: str = "",
         rate: int = 0,
         volume: int = 100,
@@ -790,7 +936,7 @@ class TtsEngine:
 
     def replace(
         self,
-        text: str,
+        text: str | SpeechDocument,
         voice_id: str = "",
         rate: int = 0,
         volume: int = 100,
@@ -799,7 +945,7 @@ class TtsEngine:
 
     def overlap(
         self,
-        text: str,
+        text: str | SpeechDocument,
         voice_id: str = "",
         rate: int = 0,
         volume: int = 100,
@@ -808,7 +954,7 @@ class TtsEngine:
 
     def speak_mode(
         self,
-        text: str,
+        text: str | SpeechDocument,
         voice_id: str = "",
         rate: int = 0,
         volume: int = 100,
@@ -948,6 +1094,51 @@ class TtsEngine:
                 self._on_started_with_id(request.request_id, request.text, started_at)
             except Exception:
                 pass
+        if self._on_document_started_with_id and request.word_spans:
+            try:
+                self._on_document_started_with_id(
+                    request.request_id, request.source_text
+                )
+            except Exception:
+                pass
+
+    def _notify_word(
+        self, request: _SpeechRequest, spoken_start: int, spoken_end: int
+    ) -> None:
+        if self._on_word_with_id is None or not request.word_spans:
+            return
+        matched = next(
+            (
+                word
+                for word in request.word_spans
+                if spoken_start < word.spoken_end and spoken_end > word.spoken_start
+            ),
+            None,
+        )
+        if matched is None:
+            return
+        try:
+            self._on_word_with_id(
+                request.request_id,
+                request.source_text,
+                matched.source_start,
+                matched.source_end,
+            )
+        except Exception:
+            pass
+
+    def _drain_session_progress(
+        self, request: _SpeechRequest, session: object
+    ) -> None:
+        drain = getattr(session, "drain_word_events", None)
+        if not callable(drain):
+            return
+        try:
+            events = drain()
+        except Exception:
+            return
+        for spoken_start, spoken_end in events:
+            self._notify_word(request, int(spoken_start), int(spoken_end))
 
     def _report_error(self, request: _SpeechRequest, exc: Exception) -> None:
         request.error = exc
@@ -1206,6 +1397,7 @@ class TtsEngine:
                         active = None
                     elif self._session is not None and self._supports_nonblocking(self._session):
                         try:
+                            self._drain_session_progress(active, self._session)
                             finished = bool(self._session.poll())
                         except Exception as exc:
                             self._report_error(active, exc)
@@ -1222,6 +1414,7 @@ class TtsEngine:
                         overlap_active.pop(request_id, None)
                         continue
                     try:
+                        self._drain_session_progress(request, session)
                         finished = bool(session.poll())
                     except Exception as exc:
                         self._report_error(request, exc)

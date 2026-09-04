@@ -35,7 +35,7 @@ class ReaderTextState:
         with self._lock:
             self.raw_ocr_text = ""
             self.corrected_ocr_text = ""
-            self.last_successful_text = text.strip()
+            self.last_successful_text = str(text) if str(text).strip() else ""
             return bool(self.last_successful_text)
 
     def begin_speech(self, text: str, request_id: int | None = None) -> None:

@@ -30,6 +30,9 @@ class ThemePalette:
     success_soft: str
     danger: str
     danger_soft: str
+    speech_line: str
+    speech_word: str
+    speech_word_text: str
 
 
 LIGHT = ThemePalette(
@@ -53,6 +56,9 @@ LIGHT = ThemePalette(
     success_soft="#dcfce7",
     danger="#b91c1c",
     danger_soft="#fee2e2",
+    speech_line="#dbeafe",
+    speech_word="#facc15",
+    speech_word_text="#172033",
 )
 
 DARK = ThemePalette(
@@ -76,6 +82,9 @@ DARK = ThemePalette(
     success_soft="#123622",
     danger="#ff7b7b",
     danger_soft="#3b1b20",
+    speech_line="#17365f",
+    speech_word="#facc15",
+    speech_word_text="#111827",
 )
 
 

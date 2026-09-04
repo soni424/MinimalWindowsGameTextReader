@@ -1,9 +1,4 @@
-"""Persistent settings for Minimal Windows Game Text Reader.
-
-The configuration deliberately stays in a small, human-readable JSON file next
-to the application.  Values read from disk are validated so a manually edited
-or partially-written file cannot prevent the app from starting.
-"""
+"""Persistent, update-safe settings for Minimal Windows Game Text Reader."""
 
 from __future__ import annotations
 
@@ -11,13 +6,38 @@ import copy
 import json
 import math
 import os
+import shutil
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Mapping
 
 
 APP_DIRECTORY = Path(__file__).resolve().parent
-CONFIG_PATH = APP_DIRECTORY / "config.json"
+APP_DATA_DIRECTORY = Path(
+    os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
+) / "GameTextReader"
+CONFIG_PATH = APP_DATA_DIRECTORY / "config.json"
+KNOWN_CONFIG_KEYS = frozenset(
+    {
+        "theme",
+        "voice",
+        "rate",
+        "volume",
+        "speech",
+        "startup",
+        "fixed_box",
+        "window",
+        "capture_profiles",
+        "selected_profile_id",
+        "hotkeys",
+        "ocr",
+    }
+)
+
+
+class ConfigImportError(RuntimeError):
+    """Raised when older settings cannot be safely imported."""
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "theme": "system",
@@ -345,17 +365,101 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def legacy_config_paths(
+    *,
+    module_directory: str | Path | None = None,
+    executable_directory: str | Path | None = None,
+) -> tuple[Path, ...]:
+    """Return old portable settings locations for this app copy."""
+
+    module_dir = Path(module_directory or APP_DIRECTORY).resolve()
+    executable_dir = Path(
+        executable_directory or Path(sys.executable).resolve().parent
+    ).resolve()
+    candidates = (
+        module_dir / "config.json",
+        executable_dir / "config.json",
+        executable_dir / "_internal" / "config.json",
+    )
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate == CONFIG_PATH or candidate in unique:
+            continue
+        unique.append(candidate)
+    return tuple(unique)
+
+
+def find_config_in_older_app_folder(folder: str | Path) -> Path:
+    """Locate the portable settings file beneath a user-selected old folder."""
+
+    selected = Path(folder).expanduser().resolve()
+    candidates = [selected / "config.json", selected / "_internal" / "config.json"]
+    if selected.name.casefold() == "_internal":
+        candidates.insert(0, selected / "config.json")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise ConfigImportError(
+        "No Game Text Reader config.json was found in that folder. "
+        "Choose the old folder that contains GameTextReader.exe."
+    )
+
+
+def _read_importable_config(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            value = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigImportError(f"Could not read settings from {path}: {exc}") from exc
+    if not isinstance(value, Mapping) or not KNOWN_CONFIG_KEYS.intersection(value):
+        raise ConfigImportError(
+            "The selected file is not a valid Game Text Reader configuration."
+        )
+    return validate_config(value)
+
+
 class ConfigStore:
     """Thread-safe read/write access to the application's JSON configuration."""
 
-    def __init__(self, path: str | Path = CONFIG_PATH) -> None:
-        self.path = Path(path)
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        *,
+        legacy_paths: tuple[str | Path, ...] | None = None,
+    ) -> None:
+        using_default_path = path is None
+        self.path = Path(path) if path is not None else CONFIG_PATH
+        self._legacy_paths = tuple(
+            Path(candidate)
+            for candidate in (
+                legacy_config_paths() if legacy_paths is None and using_default_path else (legacy_paths or ())
+            )
+        )
         self._lock = threading.RLock()
         self._data = copy.deepcopy(DEFAULT_CONFIG)
+        self.migrated_from: Path | None = None
+        self.load_warning = ""
 
     def load(self) -> dict[str, Any]:
         """Load settings from disk, preserving usable defaults after malformed JSON."""
         with self._lock:
+            if not self.path.exists() and self._legacy_paths:
+                for legacy_path in self._legacy_paths:
+                    if not legacy_path.is_file():
+                        continue
+                    try:
+                        self._data = _read_importable_config(legacy_path)
+                        self.save()
+                        self.migrated_from = legacy_path
+                        return copy.deepcopy(self._data)
+                    except ConfigImportError:
+                        continue
+                    except OSError as exc:
+                        self.load_warning = (
+                            "Your existing settings were loaded, but Windows could not "
+                            f"move them to {self.path}: {exc}"
+                        )
+                        return copy.deepcopy(self._data)
             try:
                 with self.path.open("r", encoding="utf-8") as handle:
                     disk_value = json.load(handle)
@@ -365,6 +469,39 @@ class ConfigStore:
                 disk_value = {}
             self._data = validate_config(disk_value)
             return copy.deepcopy(self._data)
+
+    def import_from_older_app_folder(self, folder: str | Path) -> Path:
+        """Validate and import settings from a separate portable app folder."""
+
+        source = find_config_in_older_app_folder(folder)
+        imported = _read_importable_config(source)
+        with self._lock:
+            backup: Path | None = None
+            if self.path.is_file():
+                backup = self.path.with_name("config.before-import.json")
+                suffix = 1
+                while backup.exists():
+                    backup = self.path.with_name(
+                        f"config.before-import.{suffix}.json"
+                    )
+                    suffix += 1
+                try:
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(self.path, backup)
+                except OSError as exc:
+                    raise ConfigImportError(
+                        f"Could not back up the current settings: {exc}"
+                    ) from exc
+            previous = self._data
+            try:
+                self._data = imported
+                self.save()
+            except OSError as exc:
+                self._data = previous
+                raise ConfigImportError(
+                    f"Could not save the imported settings: {exc}"
+                ) from exc
+        return source
 
     def get(self) -> dict[str, Any]:
         """Return a safe copy of the current in-memory settings."""

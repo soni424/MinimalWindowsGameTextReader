@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+from pathlib import Path
 from queue import Empty, SimpleQueue
-from tkinter import scrolledtext, ttk
+from tkinter import filedialog, ttk
 from typing import Callable
 
 from appearance import ThemePalette, apply_windows_title_bar, resolve_theme
@@ -414,6 +415,7 @@ class SettingsUI:
         on_clear_text: Callable[[], None] | None = None,
         on_manual_text_changed: Callable[[str], None] | None = None,
         on_startup_changed: Callable[[bool], None] | None = None,
+        on_import_settings: Callable[[Path], None] | None = None,
         on_profile_create: Callable[[str], None] | None = None,
         on_profile_rename: Callable[[str, str], None] | None = None,
         on_profile_delete: Callable[[str], None] | None = None,
@@ -432,6 +434,7 @@ class SettingsUI:
         self.on_clear_text = on_clear_text or (lambda: None)
         self.on_manual_text_changed = on_manual_text_changed or (lambda _text: None)
         self.on_startup_changed = on_startup_changed or (lambda _enabled: None)
+        self.on_import_settings = on_import_settings or (lambda _folder: None)
         self.on_profile_create = on_profile_create or (lambda _name: None)
         self.on_profile_rename = on_profile_rename or (lambda _profile_id, _name: None)
         self.on_profile_delete = on_profile_delete or (lambda _profile_id: None)
@@ -487,6 +490,9 @@ class SettingsUI:
         self._protected_words = list(ocr_settings["protected_words"])
         self._last_result: CorrectionResult | None = None
         self._updating_captured_text = False
+        self._speech_highlight_owner: int | None = None
+        self._speech_highlight_high_water = 0
+        self._suppressed_speech_highlights: set[int] = set()
         self._comboboxes: list[ttk.Combobox] = []
         self._palette = resolve_theme(settings["theme"])
 
@@ -912,8 +918,14 @@ class SettingsUI:
         captured.rowconfigure(2, weight=1)
         ttk.Label(captured, text="Last captured text", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(captured, textvariable=self.capture_meta, style="CardHint.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 8))
-        self.captured_text = scrolledtext.ScrolledText(
-            captured,
+        self.captured_text_frame = ttk.Frame(captured, style="CardInner.TFrame")
+        self.captured_text_frame.grid(
+            row=2, column=0, columnspan=2, sticky="nsew"
+        )
+        self.captured_text_frame.columnconfigure(0, weight=1)
+        self.captured_text_frame.rowconfigure(0, weight=1)
+        self.captured_text = tk.Text(
+            self.captured_text_frame,
             wrap="word",
             height=10,
             font=("Segoe UI", 11),
@@ -923,7 +935,15 @@ class SettingsUI:
             pady=10,
             undo=False,
         )
-        self.captured_text.grid(row=2, column=0, columnspan=2, sticky="nsew")
+        self.captured_scrollbar = ttk.Scrollbar(
+            self.captured_text_frame,
+            orient="vertical",
+            command=self.captured_text.yview,
+            style="Vertical.TScrollbar",
+        )
+        self.captured_text.configure(yscrollcommand=self.captured_scrollbar.set)
+        self.captured_text.grid(row=0, column=0, sticky="nsew")
+        self.captured_scrollbar.grid(row=0, column=1, sticky="ns")
         self.captured_text.bind("<<Modified>>", self._captured_text_modified)
         self.captured_text.edit_modified(False)
         capture_actions = ttk.Frame(captured, style="CardInner.TFrame")
@@ -1148,6 +1168,24 @@ class SettingsUI:
             wraplength=520,
             justify="left",
         ).grid(row=9, column=0, columnspan=3, sticky="w")
+        ttk.Separator(keys).grid(
+            row=10, column=0, columnspan=3, sticky="ew", pady=(18, 12)
+        )
+        ttk.Label(keys, text="Settings and updates", style="CardTitle.TLabel").grid(
+            row=11, column=0, columnspan=3, sticky="w"
+        )
+        ttk.Label(
+            keys,
+            text="New versions use the same Windows settings automatically. Use this once if your older app is in another folder.",
+            style="CardHint.TLabel",
+            wraplength=520,
+            justify="left",
+        ).grid(row=12, column=0, columnspan=3, sticky="w", pady=(2, 8))
+        ttk.Button(
+            keys,
+            text="Import settings from older app folder…",
+            command=self.import_older_settings,
+        ).grid(row=13, column=0, columnspan=3, sticky="w")
         parent.bind("<Configure>", self._settings_tab_resized, add="+")
         self.root.after_idle(lambda: self._layout_settings_cards(parent.winfo_width()))
 
@@ -1199,6 +1237,17 @@ class SettingsUI:
                 highlightcolor=palette.accent,
                 highlightthickness=1,
             )
+            self.captured_text.tag_configure(
+                "speech_line",
+                background=palette.speech_line,
+                foreground=palette.text,
+            )
+            self.captured_text.tag_configure(
+                "speech_word",
+                background=palette.speech_word,
+                foreground=palette.speech_word_text,
+            )
+            self.captured_text.tag_raise("speech_word", "speech_line")
         if hasattr(self, "protected_list"):
             self.protected_list.configure(
                 bg=palette.input,
@@ -1499,6 +1548,7 @@ class SettingsUI:
     def stop_speech(self) -> None:
         """Interrupt current speech and discard anything waiting behind it."""
         self.tts.stop()
+        self.clear_speech_progress()
         self.set_status("Speech stopped and the queue was cleared.")
 
     def apply_hotkeys(self) -> None:
@@ -1531,6 +1581,36 @@ class SettingsUI:
             self.set_status("Game Text Reader will start in the tray when you sign in.")
         else:
             self.set_status("Game Text Reader will no longer start when you sign in.")
+
+    def import_older_settings(self) -> None:
+        """Import a portable configuration selected by its old app folder."""
+
+        selected = filedialog.askdirectory(
+            parent=self.root,
+            title="Choose the older Game Text Reader folder",
+            mustexist=True,
+        )
+        if not selected:
+            return
+        try:
+            self.on_import_settings(Path(selected))
+        except Exception as exc:
+            message = str(exc) or "The selected settings could not be imported."
+            _ThemedAlertDialog(
+                self.root,
+                self._palette,
+                "Could not import settings",
+                message,
+            ).show()
+            self.set_status(message, error=True)
+            return
+        _ThemedAlertDialog(
+            self.root,
+            self._palette,
+            "Settings imported",
+            "Your older settings were imported safely. Close and reopen Game Text Reader to apply all of them.",
+        ).show()
+        self.set_status("Older settings imported. Restart the app to apply them.")
 
     def record_shortcut(self, target: tk.StringVar, title: str) -> None:
         """Open the chord recorder and place the captured value in its field."""
@@ -1646,6 +1726,7 @@ class SettingsUI:
     def _replace_captured_text(self, text: str) -> None:
         """Update the editor without treating an OCR/UI refresh as a user edit."""
 
+        self.clear_speech_progress()
         self._updating_captured_text = True
         try:
             self.captured_text.delete("1.0", "end")
@@ -1664,7 +1745,9 @@ class SettingsUI:
         if self._updating_captured_text:
             return
 
-        text = self.captured_text.get("1.0", "end-1c").strip()
+        self.clear_speech_progress()
+        editor_text = self.captured_text.get("1.0", "end-1c")
+        text = editor_text.strip()
         self._last_result = None
         if hasattr(self, "details_button"):
             self.details_button.configure(state="disabled")
@@ -1679,7 +1762,74 @@ class SettingsUI:
             self.capture_meta.set(
                 "Type or paste text here, or capture text from the screen."
             )
-        self.on_manual_text_changed(text)
+        self.on_manual_text_changed(editor_text if text else "")
+
+    def begin_speech_progress(self, request_id: int, source_text: str) -> None:
+        """Make a newly started mapped reading the sole highlight owner."""
+
+        if request_id < self._speech_highlight_high_water:
+            return
+        if (
+            request_id == self._speech_highlight_high_water
+            and request_id in self._suppressed_speech_highlights
+        ):
+            return
+        if request_id > self._speech_highlight_high_water:
+            self._suppressed_speech_highlights.clear()
+        self._speech_highlight_high_water = request_id
+        self._speech_highlight_owner = request_id
+        self.captured_text.tag_remove("speech_line", "1.0", "end")
+        self.captured_text.tag_remove("speech_word", "1.0", "end")
+        if self.captured_text.get("1.0", "end-1c") != source_text:
+            self._speech_highlight_owner = None
+
+    def show_speech_progress(
+        self,
+        request_id: int,
+        source_text: str,
+        source_start: int,
+        source_end: int,
+    ) -> None:
+        """Highlight the visible row and word owned by the newest reading."""
+
+        if (
+            request_id < self._speech_highlight_high_water
+            or request_id in self._suppressed_speech_highlights
+        ):
+            return
+        displayed = self.captured_text.get("1.0", "end-1c")
+        if displayed != source_text:
+            return
+        if not (0 <= source_start < source_end <= len(displayed)):
+            return
+
+        if request_id > self._speech_highlight_high_water:
+            self._suppressed_speech_highlights.clear()
+        self._speech_highlight_high_water = request_id
+        self._speech_highlight_owner = request_id
+        word_start = self.captured_text.index(f"1.0 + {source_start} chars")
+        word_end = self.captured_text.index(f"1.0 + {source_end} chars")
+        line_start = self.captured_text.index(f"{word_start} display linestart")
+        line_end = self.captured_text.index(f"{word_start} display lineend")
+        self.captured_text.tag_remove("speech_line", "1.0", "end")
+        self.captured_text.tag_remove("speech_word", "1.0", "end")
+        self.captured_text.tag_add("speech_line", line_start, line_end)
+        self.captured_text.tag_add("speech_word", word_start, word_end)
+        self.captured_text.tag_raise("speech_word", "speech_line")
+        self.captured_text.see(word_start)
+
+    def clear_speech_progress(self, request_id: int | None = None) -> None:
+        """Clear highlight tags without allowing an older voice to take over."""
+
+        if not hasattr(self, "captured_text"):
+            return
+        if request_id is not None and self._speech_highlight_owner != request_id:
+            return
+        if self._speech_highlight_owner is not None:
+            self._suppressed_speech_highlights.add(self._speech_highlight_owner)
+        self.captured_text.tag_remove("speech_line", "1.0", "end")
+        self.captured_text.tag_remove("speech_word", "1.0", "end")
+        self._speech_highlight_owner = None
 
     def set_last_result(self, result: CorrectionResult) -> None:
         """Show corrected text while retaining raw OCR and the change trace."""
@@ -1715,8 +1865,28 @@ class SettingsUI:
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
         ttk.Label(frame, text=f"{len(result.corrections)} change{'s' if len(result.corrections) != 1 else ''} • {result.elapsed_ms:.1f} ms", style="CardHint.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
-        details = scrolledtext.ScrolledText(frame, wrap="word", font=("Segoe UI", 10), padx=12, pady=10)
-        details.grid(row=1, column=0, sticky="nsew")
+        details_frame = ttk.Frame(frame)
+        details_frame.grid(row=1, column=0, sticky="nsew")
+        details_frame.columnconfigure(0, weight=1)
+        details_frame.rowconfigure(0, weight=1)
+        details = tk.Text(
+            details_frame,
+            wrap="word",
+            font=("Segoe UI", 10),
+            padx=12,
+            pady=10,
+            relief="flat",
+            borderwidth=0,
+        )
+        details_scrollbar = ttk.Scrollbar(
+            details_frame,
+            orient="vertical",
+            command=details.yview,
+            style="Vertical.TScrollbar",
+        )
+        details.configure(yscrollcommand=details_scrollbar.set)
+        details.grid(row=0, column=0, sticky="nsew")
+        details_scrollbar.grid(row=0, column=1, sticky="ns")
         changes = "\n".join(
             f"• {change.original!r} → {change.replacement!r}  ({change.reason}, {change.confidence:.0%})"
             for change in result.corrections

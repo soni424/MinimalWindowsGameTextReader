@@ -9,6 +9,7 @@ import threading
 import time
 import tkinter as tk
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from queue import Empty, SimpleQueue
 from typing import Callable
 
@@ -25,7 +26,7 @@ from ocr_engine import OcrEngine, OcrError
 from overlay import BoxEditorOverlay, QuickSnippetOverlay
 from reader_state import ReaderTextState
 from settings_ui import SettingsUI
-from speech_text import format_for_speech
+from speech_text import prepare_for_speech
 from startup_registration import (
     STARTUP_ARGUMENT,
     StartupRegistration,
@@ -98,6 +99,8 @@ class GameTextReaderApplication:
             on_error=self._speech_error,
             on_started_with_id=self._speech_started,
             on_finished_with_id=self._speech_finished,
+            on_document_started_with_id=self._speech_document_started,
+            on_word_with_id=self._speech_word,
             initial_voice_id=settings["voice"],
             initial_capture_mode=settings.get("speech", {}).get("capture_mode", "replace"),
             initial_max_overlap=settings.get("speech", {}).get("max_overlap", 2),
@@ -130,6 +133,7 @@ class GameTextReaderApplication:
             on_clear_text=self.clear_text_history,
             on_manual_text_changed=self.accept_manual_text,
             on_startup_changed=self.set_launch_at_startup,
+            on_import_settings=self.import_older_settings,
             on_profile_create=self.create_capture_profile,
             on_profile_rename=self.rename_capture_profile,
             on_profile_delete=self.delete_capture_profile,
@@ -151,6 +155,8 @@ class GameTextReaderApplication:
         self.preload_correction_engine()
         self._refresh_profiles_ui()
         self._apply_startup_visibility(start_hidden, tray_started, startup_error)
+        if self.config.load_warning:
+            self.ui.set_status(self.config.load_warning, error=True)
 
     def _apply_startup_visibility(
         self, start_hidden: bool, tray_started: bool, startup_error: str = ""
@@ -211,7 +217,12 @@ class GameTextReaderApplication:
 
     def _speech_error(self, message: str) -> None:
         self.text_state.end_speech()
-        self._schedule(lambda: self.ui.set_status(f"Speech error: {message}", error=True))
+
+        def report() -> None:
+            self.ui.clear_speech_progress()
+            self.ui.set_status(f"Speech error: {message}", error=True)
+
+        self._schedule(report)
 
     def _fixed_hotkey_received(self) -> None:
         """Timestamp the native callback before handing it to Tk's event queue."""
@@ -250,6 +261,25 @@ class GameTextReaderApplication:
 
     def _speech_finished(self, request_id: int, text: str) -> None:
         self.text_state.end_speech(text, request_id)
+        self._schedule(lambda: self.ui.clear_speech_progress(request_id))
+
+    def _speech_document_started(self, request_id: int, source_text: str) -> None:
+        """Give the newest mapped reading highlight ownership immediately."""
+
+        self._schedule(
+            lambda: self.ui.begin_speech_progress(request_id, source_text)
+        )
+
+    def _speech_word(
+        self, request_id: int, source_text: str, source_start: int, source_end: int
+    ) -> None:
+        """Hand native word timing back to Tk without touching it off-thread."""
+
+        self._schedule(
+            lambda: self.ui.show_speech_progress(
+                request_id, source_text, source_start, source_end
+            )
+        )
 
     def _apply_initial_hotkeys(self) -> None:
         settings = self.config.get()
@@ -413,13 +443,14 @@ class GameTextReaderApplication:
         if hasattr(self, "_timing_lock"):
             with self._timing_lock:
                 self._pending_speech_timing = None
+        self.ui.clear_speech_progress()
         self.ui.set_status("Speech stopped and the queue was cleared.")
 
     def read_again(self) -> None:
         """Replay the last corrected OCR text without another capture or correction."""
-        display_text = self.text_state.last_successful_text.strip()
-        spoken_text = format_for_speech(display_text)
-        if not spoken_text:
+        display_text = self.text_state.last_successful_text
+        document = prepare_for_speech(display_text)
+        if not document.spoken_text:
             self.ui.set_status("There is no successfully captured text to read again.", error=True)
             return
         settings = self.config.get()
@@ -429,7 +460,7 @@ class GameTextReaderApplication:
             with self._timing_lock:
                 self._pending_speech_timing = None
         replace = getattr(self.tts, "replace", None) or self.tts.speak
-        replace(spoken_text, settings["voice"], settings["rate"], settings["volume"])
+        replace(document, settings["voice"], settings["rate"], settings["volume"])
         self.ui.set_status("Reading the last captured text again.")
 
     def accept_manual_text(self, text: str) -> None:
@@ -450,6 +481,11 @@ class GameTextReaderApplication:
             except StartupRegistrationError:
                 pass
             raise
+
+    def import_older_settings(self, folder: Path) -> None:
+        """Validate and store settings selected from an older portable copy."""
+
+        self.config.import_from_older_app_folder(folder)
 
     def clear_text_history(self) -> None:
         self.text_state.clear_history()
@@ -544,7 +580,8 @@ class GameTextReaderApplication:
 
         self._schedule(publish_result)
         final_text = result.corrected_text.strip()
-        spoken_text = format_for_speech(final_text)
+        document = prepare_for_speech(final_text)
+        spoken_text = document.spoken_text
         if not spoken_text:
             self._schedule(lambda: self.ui.set_status(f"{job.source}: no readable text found."))
             return
@@ -567,13 +604,13 @@ class GameTextReaderApplication:
         self._schedule(lambda: self.ui.set_status(f"{job.source}: {speech_status}{suffix}."))
         if capture_mode == "replace":
             replace = getattr(self.tts, "replace", None) or self.tts.speak
-            replace(spoken_text, voice, rate, volume)
+            replace(document, voice, rate, volume)
         elif capture_mode == "overlap":
             overlap = getattr(self.tts, "overlap", None) or self.tts.speak
-            overlap(spoken_text, voice, rate, volume)
+            overlap(document, voice, rate, volume)
         else:
             enqueue = getattr(self.tts, "enqueue", None) or self.tts.speak
-            enqueue(spoken_text, voice, rate, volume)
+            enqueue(document, voice, rate, volume)
 
     def _capture_failed(self, job: CaptureJob, exc: Exception) -> None:
         message = str(exc) if isinstance(exc, OcrError) else f"{job.source} capture failed: {exc}"

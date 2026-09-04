@@ -757,6 +757,115 @@ class WindowsComponentTests(unittest.TestCase):
             root.destroy()
             path.unlink(missing_ok=True)
 
+    def test_last_captured_text_uses_themed_scrollbar(self) -> None:
+        class SilentTts:
+            @staticmethod
+            def list_voices() -> list[object]:
+                return []
+
+        path = Path(__file__).resolve().parent / "work" / "ui_scrollbar_theme_test.json"
+        path.unlink(missing_ok=True)
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        try:
+            store = ConfigStore(path)
+            store.load()
+            store.update(theme="dark")
+            ui = SettingsUI(
+                root,
+                store,
+                SilentTts(),
+                lambda: None,
+                lambda: None,
+                lambda: None,
+                lambda *_: None,
+            )
+
+            self.assertEqual(ui.captured_scrollbar.winfo_class(), "TScrollbar")
+            self.assertEqual(
+                ui.style.lookup(ui.captured_scrollbar.cget("style"), "troughcolor"),
+                DARK.input,
+            )
+        finally:
+            root.destroy()
+            path.unlink(missing_ok=True)
+
+    def test_speech_progress_highlights_visible_row_and_newest_word(self) -> None:
+        class SilentTts:
+            @staticmethod
+            def list_voices() -> list[object]:
+                return []
+
+        path = Path(__file__).resolve().parent / "work" / "ui_speech_progress_test.json"
+        path.unlink(missing_ok=True)
+        root = __import__("tkinter").Tk()
+        root.attributes("-alpha", 0.0)
+        root.geometry("820x740")
+        try:
+            store = ConfigStore(path)
+            store.load()
+            store.update(theme="dark")
+            ui = SettingsUI(
+                root,
+                store,
+                SilentTts(),
+                lambda: None,
+                lambda: None,
+                lambda: None,
+                lambda *_: None,
+            )
+            source = "\n".join(f"Line {index} contains several wrapped words." for index in range(40))
+            ui.set_last_text(source)
+            root.update()
+            word = "wrapped"
+            first_start = source.index(word)
+            last_start = source.rindex(word)
+
+            ui.show_speech_progress(2, source, last_start, last_start + len(word))
+            root.update()
+            word_ranges = ui.captured_text.tag_ranges("speech_word")
+            line_ranges = ui.captured_text.tag_ranges("speech_line")
+            self.assertEqual(ui.captured_text.get(word_ranges[0], word_ranges[1]), word)
+            self.assertTrue(line_ranges)
+            self.assertGreater(ui.captured_text.yview()[0], 0.0)
+            self.assertEqual(
+                ui.captured_text.tag_cget("speech_word", "background"),
+                DARK.speech_word,
+            )
+            ui._configure_styles(LIGHT)
+            ui._apply_tk_colours(LIGHT)
+            self.assertEqual(
+                ui.captured_text.tag_cget("speech_line", "background"),
+                LIGHT.speech_line,
+            )
+            self.assertEqual(
+                ui.captured_text.tag_cget("speech_word", "background"),
+                LIGHT.speech_word,
+            )
+
+            # An older overlapping request cannot take ownership back.
+            ui.show_speech_progress(1, source, first_start, first_start + len(word))
+            self.assertEqual(ui.captured_text.get(*ui.captured_text.tag_ranges("speech_word")), word)
+            self.assertEqual(ui._speech_highlight_owner, 2)
+            ui.clear_speech_progress(1)
+            self.assertTrue(ui.captured_text.tag_ranges("speech_word"))
+            ui.clear_speech_progress(2)
+            self.assertFalse(ui.captured_text.tag_ranges("speech_word"))
+
+            # A newer voice owns highlighting from playback start, before its
+            # first word boundary arrives.
+            ui.begin_speech_progress(3, source)
+            ui.show_speech_progress(2, source, first_start, first_start + len(word))
+            self.assertFalse(ui.captured_text.tag_ranges("speech_word"))
+            ui.show_speech_progress(3, source, first_start, first_start + len(word))
+            self.assertTrue(ui.captured_text.tag_ranges("speech_word"))
+            ui.clear_speech_progress(3)
+            ui.show_speech_progress(3, source, first_start, first_start + len(word))
+            self.assertFalse(ui.captured_text.tag_ranges("speech_word"))
+        finally:
+            root.destroy()
+            path.unlink(missing_ok=True)
+
     def test_startup_checkbox_rolls_back_when_windows_rejects_the_change(self) -> None:
         root = __import__("tkinter").Tk()
         root.withdraw()
@@ -782,6 +891,36 @@ class WindowsComponentTests(unittest.TestCase):
                 ui._startup_changed()
             self.assertFalse(ui.startup_enabled.get())
             self.assertEqual(statuses, [("Startup access was blocked", True)])
+        finally:
+            root.destroy()
+
+    def test_older_settings_import_uses_selected_folder_and_reports_restart(self) -> None:
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        selected: list[Path] = []
+        statuses: list[tuple[str, bool]] = []
+
+        class Alert:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def show(self) -> None:
+                pass
+
+        ui = SettingsUI.__new__(SettingsUI)
+        ui.root = root
+        ui._palette = DARK
+        ui.on_import_settings = selected.append
+        ui.set_status = lambda message, error=False: statuses.append((message, error))
+        try:
+            with (
+                patch.object(settings_ui_module.filedialog, "askdirectory", return_value=r"C:\Old App"),
+                patch.object(settings_ui_module, "_ThemedAlertDialog", Alert),
+            ):
+                ui.import_older_settings()
+            self.assertEqual(selected, [Path(r"C:\Old App")])
+            self.assertIn("Restart", statuses[-1][0])
+            self.assertFalse(statuses[-1][1])
         finally:
             root.destroy()
 
@@ -881,10 +1020,72 @@ class WindowsComponentTests(unittest.TestCase):
                 expected,
                 "SAPI PCM bytes and the WAV header use different formats",
             )
+            self.assertGreaterEqual(len(session._sapi_word_timings), 3)
+            self.assertEqual(
+                [(item.spoken_start, item.spoken_end) for item in session._sapi_word_timings[:3]],
+                [(0, 4), (5, 11), (12, 16)],
+            )
+            self.assertEqual(
+                list(session._sapi_word_timings),
+                sorted(session._sapi_word_timings, key=lambda item: item.seconds),
+            )
         finally:
             session.close()
             del wave_format, audio_format
             pythoncom.CoUninitialize()
+
+    def test_winrt_synthesis_exposes_word_timing_metadata(self) -> None:
+        import asyncio
+
+        try:
+            from winrt.windows.media.core import SpeechCue  # noqa: F401
+            from winrt.windows.media.speechsynthesis import SpeechSynthesizer
+        except ImportError as exc:
+            self.skipTest(f"WinRT speech metadata package is unavailable: {exc}")
+        from tts_engine import _WindowsSpeechSession
+
+        loop = asyncio.new_event_loop()
+        synthesizer = SpeechSynthesizer()
+        stream = None
+        try:
+            synthesizer.options.include_word_boundary_metadata = True
+            stream = loop.run_until_complete(
+                synthesizer.synthesize_text_to_stream_async("One two three.")
+            )
+            timings = _WindowsSpeechSession._winrt_word_timings(stream)
+            self.assertEqual(
+                [(item.spoken_start, item.spoken_end) for item in timings],
+                [(0, 3), (4, 7), (8, 13)],
+            )
+        finally:
+            if stream is not None:
+                stream.close()
+            synthesizer.close()
+            loop.close()
+
+    def test_playback_progress_coalesces_boundaries_crossed_in_one_poll(self) -> None:
+        from datetime import timedelta
+
+        from tts_engine import _PlaybackChannel, _WindowsSpeechSession, _WordTiming
+
+        class PlaybackSession:
+            position = timedelta(seconds=0.55)
+
+        class Player:
+            playback_session = PlaybackSession()
+
+        session = _WindowsSpeechSession()
+        session._winrt_current_channel = _PlaybackChannel(
+            Player(),
+            word_timings=(
+                _WordTiming(0.10, 0, 3),
+                _WordTiming(0.30, 4, 7),
+                _WordTiming(0.70, 8, 13),
+            ),
+        )
+
+        self.assertEqual(session.drain_word_events(), ((4, 7),))
+        self.assertEqual(session.drain_word_events(), ())
 
     def test_media_player_replacement_retains_stream_until_handoff(self) -> None:
         class Stream:

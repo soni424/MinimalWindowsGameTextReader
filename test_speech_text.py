@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from speech_text import format_for_speech
+from speech_text import format_for_speech, prepare_for_speech
 
 
 class SpeechTextTests(unittest.TestCase):
@@ -41,6 +41,33 @@ class SpeechTextTests(unittest.TestCase):
 
     def test_empty_text_stays_empty(self) -> None:
         self.assertEqual(format_for_speech(" \n\n "), "")
+
+    def test_speech_document_maps_formatted_words_to_displayed_text(self) -> None:
+        source = "Sentinel 27's Testimony\n\n1. First item\n• Naytiba's second item"
+        document = prepare_for_speech(source)
+
+        self.assertEqual(
+            document.spoken_text,
+            "Sentinel 27's Testimony. First item. Naytiba's second item.",
+        )
+        self.assertEqual(
+            [source[word.source_start : word.source_end] for word in document.words],
+            ["Sentinel", "27's", "Testimony", "First", "item", "Naytiba's", "second", "item"],
+        )
+        self.assertEqual(
+            [document.spoken_text[word.spoken_start : word.spoken_end] for word in document.words],
+            ["Sentinel", "27's", "Testimony", "First", "item", "Naytiba's", "second", "item"],
+        )
+
+    def test_repeated_words_and_compacted_whitespace_keep_forward_mapping(self) -> None:
+        source = "One   One\n\n- One"
+        document = prepare_for_speech(source)
+
+        self.assertEqual(document.spoken_text, "One One. One.")
+        self.assertEqual(
+            [source[word.source_start : word.source_end] for word in document.words],
+            ["One", "One", "One"],
+        )
 
 
 if __name__ == "__main__":

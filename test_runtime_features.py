@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import threading
 import time
@@ -16,17 +18,94 @@ from capture_profiles import (
     resolve_capture_area,
 )
 from capture_pipeline import CaptureJob, CaptureWorker, PipelineTimings
-from config import ConfigStore, validate_config
+from config import CONFIG_PATH, ConfigImportError, ConfigStore, validate_config
 import main as main_module
 from main import GameTextReaderApplication
 from ocr_correction import CorrectionResult
 from reader_state import ReaderTextState
+from speech_text import prepare_for_speech
 from startup_registration import StartupRegistrationError
 from tts_engine import TtsEngine
 from window_state import WindowPlacement, WindowStateController, restore_window_placement
 
 
 class ConfigurationMigrationTests(unittest.TestCase):
+    def test_default_settings_path_is_stable_local_app_data(self) -> None:
+        self.assertEqual(
+            CONFIG_PATH,
+            Path(os.environ["LOCALAPPDATA"]) / "GameTextReader" / "config.json",
+        )
+
+    def test_portable_settings_are_migrated_without_deleting_the_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / "old" / "_internal" / "config.json"
+            target = root / "AppData" / "GameTextReader" / "config.json"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text(
+                json.dumps({"theme": "dark", "hotkeys": {"fixed": "Alt+Q"}}),
+                encoding="utf-8",
+            )
+
+            store = ConfigStore(target, legacy_paths=(legacy,))
+            loaded = store.load()
+
+            self.assertEqual(loaded["theme"], "dark")
+            self.assertEqual(loaded["hotkeys"]["fixed"], "Alt+Q")
+            self.assertEqual(store.migrated_from, legacy)
+            self.assertTrue(legacy.exists())
+            self.assertTrue(target.exists())
+
+    def test_existing_app_data_wins_over_legacy_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "config.json"
+            legacy = root / "old-config.json"
+            target.write_text(json.dumps({"theme": "light"}), encoding="utf-8")
+            legacy.write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+
+            store = ConfigStore(target, legacy_paths=(legacy,))
+
+            self.assertEqual(store.load()["theme"], "light")
+            self.assertIsNone(store.migrated_from)
+
+    def test_manual_old_folder_import_validates_and_backs_up_current_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "current" / "config.json"
+            old_config = root / "old-app" / "_internal" / "config.json"
+            old_config.parent.mkdir(parents=True)
+            old_config.write_text(
+                json.dumps({"theme": "dark", "voice": "old-voice"}),
+                encoding="utf-8",
+            )
+            store = ConfigStore(target)
+            store.load()
+            store.update(theme="light", voice="current-voice")
+
+            source = store.import_from_older_app_folder(root / "old-app")
+
+            self.assertEqual(source, old_config)
+            self.assertEqual(store.get()["voice"], "old-voice")
+            backup = target.with_name("config.before-import.json")
+            self.assertEqual(json.loads(backup.read_text(encoding="utf-8"))["voice"], "current-voice")
+
+    def test_invalid_manual_import_does_not_change_current_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "current" / "config.json"
+            old_config = root / "old-app" / "config.json"
+            old_config.parent.mkdir(parents=True)
+            old_config.write_text("not json", encoding="utf-8")
+            store = ConfigStore(target)
+            store.load()
+            store.update(theme="dark")
+
+            with self.assertRaises(ConfigImportError):
+                store.import_from_older_app_folder(root / "old-app")
+
+            self.assertEqual(store.get()["theme"], "dark")
+
     def test_legacy_fixed_box_becomes_the_default_capture_profile(self) -> None:
         settings = validate_config(
             {
@@ -316,7 +395,7 @@ class ReaderStateTests(unittest.TestCase):
         state.accept_success(CorrectionResult("Noytibos", "Naytibas", (), 0.1))
 
         self.assertTrue(state.accept_manual_text("  Noytibos typed exactly  "))
-        self.assertEqual(state.last_successful_text, "Noytibos typed exactly")
+        self.assertEqual(state.last_successful_text, "  Noytibos typed exactly  ")
         self.assertEqual(state.raw_ocr_text, "")
         self.assertEqual(state.corrected_ocr_text, "")
         self.assertTrue(state.can_read_again)
@@ -370,7 +449,9 @@ class ReaderStateTests(unittest.TestCase):
         app.read_again()
 
         self.assertEqual(app.tts.stopped, 1)
-        self.assertEqual(app.tts.spoken, [("Final corrected dialogue.", "voice", 2, 88)])
+        self.assertEqual(len(app.tts.spoken), 1)
+        self.assertEqual(app.tts.spoken[0][0].spoken_text, "Final corrected dialogue.")
+        self.assertEqual(app.tts.spoken[0][1:], ("voice", 2, 88))
 
     def test_read_again_speaks_manual_text_without_ocr_correction(self) -> None:
         spoken: list[tuple[object, ...]] = []
@@ -401,7 +482,9 @@ class ReaderStateTests(unittest.TestCase):
 
         app.read_again()
 
-        self.assertEqual(spoken, [("Noytibos wrapped text.", "voice", 1, 70)])
+        self.assertEqual(len(spoken), 1)
+        self.assertEqual(spoken[0][0].spoken_text, "Noytibos wrapped text.")
+        self.assertEqual(spoken[0][1:], ("voice", 1, 70))
 
 
 class StartupFlowTests(unittest.TestCase):
@@ -556,7 +639,10 @@ class ApplicationSpeechRoutingTests(unittest.TestCase):
             CorrectionResult("First", "First", (), 0.0),
             PipelineTimings(time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter()),
         )
-        self.assertEqual(calls, [("queue", "First.", 2, 88)])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "queue")
+        self.assertEqual(calls[0][1].spoken_text, "First.")
+        self.assertEqual(calls[0][2:], (2, 88))
 
     def test_capture_result_can_replace_the_current_line_without_stopping_audio(self) -> None:
         app, calls = self._make_app("replace")
@@ -566,10 +652,70 @@ class ApplicationSpeechRoutingTests(unittest.TestCase):
             CorrectionResult("Next", "Next", (), 0.0),
             PipelineTimings(time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter(), time.perf_counter()),
         )
-        self.assertEqual(calls, [("replace", "Next.", 2, 88)])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "replace")
+        self.assertEqual(calls[0][1].spoken_text, "Next.")
+        self.assertEqual(calls[0][2:], (2, 88))
 
 
 class SpeechResourceTests(unittest.TestCase):
+    def test_mapped_speech_emits_source_word_progress(self) -> None:
+        progress: list[tuple[int, str, int, int]] = []
+        started_documents: list[tuple[int, str]] = []
+
+        class Session:
+            def __init__(self) -> None:
+                self.sent = False
+                self.finished = False
+
+            def prepare(self, _voice_id: str) -> None:
+                pass
+
+            def start(self, _request: object, on_started: object, replace: bool = False) -> None:
+                on_started()  # type: ignore[operator]
+
+            def drain_word_events(self) -> tuple[tuple[int, int], ...]:
+                if self.sent:
+                    return ()
+                self.sent = True
+                return ((7, 12),)
+
+            def poll(self) -> bool:
+                if self.sent:
+                    self.finished = True
+                return self.finished
+
+            def stop(self) -> None:
+                self.finished = True
+
+            def close(self) -> None:
+                pass
+
+        document = prepare_for_speech("Title\n\nWorld")
+        engine = TtsEngine(
+            session_factory=Session,
+            on_document_started_with_id=lambda request_id, source: started_documents.append(
+                (request_id, source)
+            ),
+            on_word_with_id=lambda request_id, source, start, end: progress.append(
+                (request_id, source, start, end)
+            ),
+        )
+        try:
+            ticket = engine.speak(document)
+            self.assertTrue(ticket.wait(1))
+        finally:
+            engine.shutdown()
+
+        self.assertEqual(
+            progress,
+            [(ticket.request_id, "Title\n\nWorld", 7, 12)],
+        )
+        self.assertEqual(
+            started_documents,
+            [(ticket.request_id, "Title\n\nWorld")],
+        )
+
     def test_replacement_starts_without_waiting_for_backend_cleanup(self) -> None:
         started: list[str] = []
         first_started = threading.Event()

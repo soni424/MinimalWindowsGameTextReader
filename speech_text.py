@@ -3,12 +3,33 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 
 _BULLET_PREFIX = re.compile(
     r"^\s*(?:(?:[•◦▪‣⁃∙·●○■□◆◇▶►*]|[-–—])\s+|(?:\d{1,3}|[A-Za-z])[.)]\s+)"
 )
 _TRAILING_PAUSE = re.compile(r'''[.,!?…;:]["'”’\])}]*$''')
+_WORD = re.compile(r"\w+(?:[\-'’]\w+)*", re.UNICODE)
+
+
+@dataclass(frozen=True)
+class SpeechWordSpan:
+    """Map one spoken word back to the text displayed in the reader."""
+
+    spoken_start: int
+    spoken_end: int
+    source_start: int
+    source_end: int
+
+
+@dataclass(frozen=True)
+class SpeechDocument:
+    """Speech-ready text plus stable source positions for live highlighting."""
+
+    source_text: str
+    spoken_text: str
+    words: tuple[SpeechWordSpan, ...]
 
 
 def _compact_line(value: str) -> str:
@@ -68,4 +89,39 @@ def format_for_speech(text: str) -> str:
     return " ".join(spoken_segments)
 
 
-__all__ = ["format_for_speech"]
+def prepare_for_speech(text: str) -> SpeechDocument:
+    """Format text for speech and retain positions for every preserved word.
+
+    Layout formatting only removes list prefixes, compacts whitespace, and adds
+    pause punctuation.  A forward alignment is therefore sufficient and, unlike
+    a character rewrite map, remains easy to audit for game-specific text.
+    """
+
+    source_text = str(text or "")
+    spoken_text = format_for_speech(source_text)
+    if not spoken_text:
+        return SpeechDocument(source_text, "", ())
+
+    source_words = list(_WORD.finditer(source_text))
+    source_index = 0
+    mapped: list[SpeechWordSpan] = []
+    for spoken_word in _WORD.finditer(spoken_text):
+        while source_index < len(source_words):
+            source_word = source_words[source_index]
+            source_index += 1
+            if source_word.group(0) != spoken_word.group(0):
+                continue
+            mapped.append(
+                SpeechWordSpan(
+                    spoken_word.start(),
+                    spoken_word.end(),
+                    source_word.start(),
+                    source_word.end(),
+                )
+            )
+            break
+
+    return SpeechDocument(source_text, spoken_text, tuple(mapped))
+
+
+__all__ = ["SpeechDocument", "SpeechWordSpan", "format_for_speech", "prepare_for_speech"]

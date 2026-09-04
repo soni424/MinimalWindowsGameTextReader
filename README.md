@@ -8,6 +8,7 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 
 - Reads a reusable fixed screen region or a one-time snippet selection.
 - Reads text you type or paste into the editable result box.
+- Follows speech with a highlighted visible row and current word.
 - Uses offline Windows OCR and installed Windows speech voices.
 - Conservatively corrects common game-font OCR mistakes while protecting fictional terminology.
 - Supports custom replacements, pronunciation previews, and protected game-specific words.
@@ -15,7 +16,7 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 - Can start quietly in the system tray when you sign in to Windows.
 - Supports rapid dialogue reading with replace, queue, or optional overlapping voices.
 - Stores multiple capture profiles and remaps their regions after display changes.
-- Includes System, Dark, and Light appearances throughout the main interface, dialogs, and drop-down controls.
+- Includes System, Dark, and Light appearances throughout the main interface, dialogs, drop-down controls, and scrollbars.
 - Runs quietly from the Windows system tray.
 
 ## Install the Windows release
@@ -79,6 +80,7 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 - The **Voice & shortcuts** tab contains speech controls and global shortcut setup. On wide or maximized windows, the two cards use side-by-side columns; they stack automatically when the window is narrower.
 - Enable **Launch when I sign in to Windows** in that tab to start quietly in the system tray with global shortcuts ready. It applies to the current Windows account and does not require administrator access.
 - **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
+- During a capture or **Read Again**, the current visible row is shaded blue and the spoken word is highlighted in gold. Long text scrolls automatically. With overlapping voices, the newest reading owns the highlight.
 - Speed and volume changes are saved automatically, including changes made with the sliders.
 - **Test selected voice** uses a 60% preview cap to avoid an unexpected blast; normal reads still use the saved volume.
 - OCR line layout is retained in displayed and copied text. For speech, ordinary wrapped lines remain continuous, while headings, visually separate blocks, and bullet items receive natural punctuation pauses; bullet symbols themselves are not spoken.
@@ -92,7 +94,9 @@ Choose **Record** beside Read Fixed Box, Select a Snippet, or the optional Read 
 
 Windows OCR, its event loop, SAPI voice tokens/player, and WinRT synthesizer/media player remain alive on their dedicated workers for repeated dialogue captures. When OCR debug logging is enabled, the same rotating log includes measured dispatch, capture, OCR, correction, and speech-start timings.
 
-Settings persist in `config.json` next to the application. Manually typed reading text is temporary and is not restored after restarting. Windows organization policies or disabling the app in Windows **Startup Apps** can override its launch-at-sign-in preference.
+Settings persist in `%LOCALAPPDATA%\GameTextReader\config.json`, independently of the extracted application folder. That keeps appearance, voices, shortcuts, profiles, capture areas, OCR rules, speech behavior, window placement, and startup preference across updates. The first updated launch automatically imports an older `config.json` when it remains beside the application. If the old copy is in a different folder, use **Voice & shortcuts → Settings and updates → Import settings from older app folder…** once, then restart the app. The old file is retained and an existing AppData configuration is backed up before a manual import.
+
+Manually typed reading text is temporary and is not restored after restarting. Settings are local to the current Windows account and computer. Windows organization policies or disabling the app in Windows **Startup Apps** can override its launch-at-sign-in preference.
 
 ## Troubleshooting audio bursts
 
@@ -111,6 +115,7 @@ python -m PyInstaller GameTextReader.spec --noconfirm
 ```
 
 The packaged application is created in `dist/GameTextReader`.
+Release packages should not contain `config.json`; each user's settings are created in Windows AppData on first launch.
 
 ## Verify
 
@@ -118,7 +123,7 @@ The packaged application is created in `dist/GameTextReader`.
 python -m unittest discover -v
 ```
 
-The test suite verifies correction, profile migration/CRUD/display mapping, window restoration and DPI layout, editable Read Again text, pronunciation previews, Windows startup registration, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
+The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, themed scrollbars, pronunciation previews, Windows startup registration, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
 
 ## App icon assets
 
