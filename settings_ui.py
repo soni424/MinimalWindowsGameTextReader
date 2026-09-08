@@ -5,12 +5,15 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from pathlib import Path
+import sys
+import re
 from queue import Empty, SimpleQueue
 from tkinter import filedialog, ttk
 from typing import Callable
 
 from appearance import ThemePalette, apply_windows_title_bar, resolve_theme
 from config import ConfigStore
+from app_version import version_label
 from hotkey_manager import HotkeyError, normalise_hotkey
 from ocr_correction import CorrectionResult
 from tts_engine import TtsEngine, Voice
@@ -212,6 +215,7 @@ class _ReplacementDialog:
         palette: ThemePalette,
         initial: dict[str, object] | None = None,
         preview: Callable[[str], None] | None = None,
+        focus_replacement: bool = False,
     ) -> None:
         initial = initial or {}
         self.palette = palette
@@ -269,7 +273,7 @@ class _ReplacementDialog:
         self.original.trace_add("write", lambda *_args: self._update_play_states())
         self.replacement.trace_add("write", lambda *_args: self._update_play_states())
         self._update_play_states()
-        _show_modal(self.window, parent, original_entry)
+        _show_modal(self.window, parent, replacement_entry if focus_replacement else original_entry)
 
     def _update_play_states(self) -> None:
         callback_available = self._preview is not None
@@ -348,13 +352,28 @@ class _ShortcutRecorderDialog:
         ttk.Label(frame, text="Examples: Ctrl + Shift + T, Alt + Q, Shift + F8", style="CardHint.TLabel").pack()
         ttk.Button(frame, text="Cancel", command=self.window.destroy).pack(pady=(18, 0))
         self.window.bind("<KeyPress>", self._key_pressed)
+        self.window.bind("<KeyRelease>", self._key_released)
+        self.window.bind("<FocusOut>", self._focus_lost)
         self.window.protocol("WM_DELETE_WINDOW", self.window.destroy)
         _show_modal(self.window, parent, self.window)
+
+    def _key_released(self, event: tk.Event) -> str:
+        held = getattr(self, '_held_modifier_keys', set())
+        held.discard(str(event.keysym))
+        self._pressed_modifiers = {self._MODIFIERS[key] for key in held}
+        return 'break'
+
+    def _focus_lost(self, _event: object = None) -> None:
+        self._pressed_modifiers.clear()
+        self._held_modifier_keys = set()
 
     def _key_pressed(self, event: tk.Event) -> str:
         keysym = str(event.keysym)
         modifier = self._MODIFIERS.get(keysym)
         if modifier:
+            if not hasattr(self, '_held_modifier_keys'):
+                self._held_modifier_keys = set()
+            self._held_modifier_keys.add(keysym)
             self._pressed_modifiers.add(modifier)
             self.prompt.set(" + ".join(sorted(self._pressed_modifiers)) + " + …")
             return "break"
@@ -416,6 +435,8 @@ class SettingsUI:
         on_manual_text_changed: Callable[[str], None] | None = None,
         on_startup_changed: Callable[[bool], None] | None = None,
         on_import_settings: Callable[[Path], None] | None = None,
+        on_seek: Callable[[int, str, int], object] | None = None,
+        on_review_result: Callable[[CorrectionResult], None] | None = None,
         on_profile_create: Callable[[str], None] | None = None,
         on_profile_rename: Callable[[str, str], None] | None = None,
         on_profile_delete: Callable[[str], None] | None = None,
@@ -435,6 +456,8 @@ class SettingsUI:
         self.on_manual_text_changed = on_manual_text_changed or (lambda _text: None)
         self.on_startup_changed = on_startup_changed or (lambda _enabled: None)
         self.on_import_settings = on_import_settings or (lambda _folder: None)
+        self.on_seek = on_seek or (lambda *_args: None)
+        self.on_review_result = on_review_result or (lambda _result: None)
         self.on_profile_create = on_profile_create or (lambda _name: None)
         self.on_profile_rename = on_profile_rename or (lambda _profile_id, _name: None)
         self.on_profile_delete = on_profile_delete or (lambda _profile_id: None)
@@ -468,6 +491,10 @@ class SettingsUI:
         self.fixed_hotkey = tk.StringVar(value=settings["hotkeys"]["fixed"])
         self.snippet_hotkey = tk.StringVar(value=settings["hotkeys"]["snippet"])
         self.read_again_hotkey = tk.StringVar(value=settings["hotkeys"].get("read_again", ""))
+        self._active_hotkey_values = (self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get())
+        self.shortcut_edit_status = tk.StringVar(value="Recorded values match the saved shortcuts.")
+        for variable in (self.fixed_hotkey, self.snippet_hotkey, self.read_again_hotkey):
+            variable.trace_add("write", self._shortcut_edits_changed)
         self.startup_enabled = tk.BooleanVar(
             value=bool(settings.get("startup", {}).get("enabled", False))
         )
@@ -514,11 +541,18 @@ class SettingsUI:
         self.root.option_add("*Font", "{Segoe UI} 10")
         self.root.configure(bg=self._palette.window)
         self.root.bind("<Map>", self._window_mapped, add="+")
+        self.root.bind("<Destroy>", self._root_destroyed, add="+")
         self.style = ttk.Style(self.root)
         try:
             self.style.theme_use("clam")
         except tk.TclError:
             pass
+
+    def _root_destroyed(self, event: object) -> None:
+        if getattr(event, "widget", None) is self.root:
+            # Tcl timers can survive Python widget-command destruction.
+            for identifier in self.root.tk.call("after", "info"):
+                self.root.after_cancel(identifier)
 
     def _configure_styles(self, palette: ThemePalette) -> None:
         """Apply semantic colours to every ttk style in one place."""
@@ -701,6 +735,12 @@ class SettingsUI:
             darkcolor=palette.border,
         )
 
+        for scrollbar_style in ('TScrollbar', 'Vertical.TScrollbar', 'Horizontal.TScrollbar'):
+            style.map(scrollbar_style,
+                      background=[('disabled', palette.button), ('pressed', palette.accent_pressed), ('active', palette.button_hover)],
+                      arrowcolor=[('disabled', palette.muted), ('active', palette.text)],
+                      troughcolor=[('disabled', palette.input), ('active', palette.input)])
+
         # The open list is a classic Tk Listbox created by ttk's combobox
         # implementation, not another ttk widget. Style both the option
         # database (for newly-created popdowns) and existing popdowns (for a
@@ -802,6 +842,102 @@ class SettingsUI:
             # configure call when the user closes it during a theme switch.
             return
 
+    def show_about(self) -> None:
+        location = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(__file__).parent / 'main.py'
+        _ThemedAlertDialog(self.root, self._palette, 'About Game Text Reader',
+                           f'{version_label()}\n\nApplication: {location}\n\nSettings: {self.config.path}').show()
+
+    def _reader_word(self, event: object) -> tuple[int, int] | None:
+        widget = self.captured_text
+        pointer = getattr(event, 'num', None) in (1, 3)
+        index = widget.index(f'@{event.x},{event.y}') if pointer else widget.index('insert')
+        if pointer:
+            box = widget.bbox(index)
+            if box is None or not (box[0] <= event.x < box[0] + box[2] and box[1] <= event.y < box[1] + box[3]):
+                return None
+        offset = len(widget.get('1.0', index))
+        text = widget.get('1.0', 'end-1c')
+        for word in re.finditer(r"\w+(?:['’\-]\w+)*", text):
+            if word.start() <= offset < word.end():
+                return word.start(), word.end()
+        return None
+
+    def _reader_double_click(self, event: object) -> None:
+        word = self._reader_word(event)
+        if word is not None and self._speech_highlight_owner is not None:
+            self.on_seek(self._speech_highlight_owner, self.captured_text.get('1.0', 'end-1c'), word[0])
+
+    def _reader_context_menu(self, event: object) -> str:
+        widget = self.captured_text
+        selection = widget.tag_ranges('sel')
+        if not selection:
+            word = self._reader_word(event)
+            if word:
+                widget.tag_add('sel', f'1.0 + {word[0]} chars', f'1.0 + {word[1]} chars')
+                selection = widget.tag_ranges('sel')
+        p = self._palette
+        menu = tk.Menu(widget, tearoff=False, bg=p.card, fg=p.text,
+                       activebackground=p.selection, activeforeground=p.text,
+                       disabledforeground=p.muted, bd=1, relief='solid')
+        def edit(action: str) -> None:
+            widget.focus_set()
+            widget.event_generate(f'<<{action}>>')
+        for label in ('Copy', 'Cut', 'Paste'):
+            enabled = bool(selection) if label != 'Paste' else True
+            menu.add_command(label=label, state='normal' if enabled else 'disabled', command=lambda a=label: edit(a))
+        menu.add_command(label='Select All', command=lambda: widget.tag_add('sel', '1.0', 'end-1c'))
+        menu.add_separator()
+        for label, replace_now in (('Replace Word…', True), ('Add to Replacement Rules…', False)):
+            menu.add_command(label=label, state='normal' if selection else 'disabled',
+                             command=lambda now=replace_now: self._replacement_from_selection(now))
+        try:
+            x = getattr(event, 'x_root', widget.winfo_rootx() + 20)
+            y = getattr(event, 'y_root', widget.winfo_rooty() + 20)
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+            if hasattr(self, '_reader_menu'):
+                self._reader_menu.destroy()
+            self._reader_menu = menu
+        return 'break'
+
+    def _replacement_from_selection(self, replace_now: bool) -> None:
+        ranges = self.captured_text.tag_ranges('sel')
+        if not ranges:
+            return
+        source = self.captured_text.get('1.0', 'end-1c')
+        start = len(self.captured_text.get('1.0', ranges[0]))
+        original = self.captured_text.get(*ranges)
+        existing = next((i for i, rule in enumerate(self._replacement_rules)
+                         if (rule['original'] == original if rule.get('case_sensitive')
+                             else rule['original'].casefold() == original.casefold())), None)
+        initial = self._replacement_rules[existing] if existing is not None else {'original': original}
+        dialog = _ReplacementDialog(self.root, self._palette, initial,
+                                    preview=lambda text: self._preview_speech(text, 'replacement preview'),
+                                    focus_replacement=True)
+        if dialog.result is None:
+            return
+        previous = list(self._replacement_rules)
+        if existing is None:
+            self._replacement_rules.append(dialog.result)
+        else:
+            self._replacement_rules[existing] = dialog.result
+        try:
+            self.save_ocr_settings()
+        except Exception as exc:
+            self._replacement_rules = previous
+            _ThemedAlertDialog(self.root, self._palette, 'Could not save rule', str(exc)).show()
+            return
+        self._refresh_replacements(existing if existing is not None else len(self._replacement_rules) - 1)
+        changed = replace_now and self.captured_text.get('1.0', 'end-1c') == source
+        if changed:
+            self.tts.stop()
+            self.clear_speech_progress()
+            self.captured_text.delete(f'1.0 + {start} chars', f'1.0 + {start + len(original)} chars')
+            self.captured_text.insert(f'1.0 + {start} chars', str(dialog.result['replacement']))
+            self._captured_text_modified()
+        self.set_status('Replacement rule saved.' + (' Selected text replaced.' if changed else ''))
+
     def _build(self) -> None:
         outer = ttk.Frame(self.root, style="App.TFrame", padding=(18, 16, 18, 12))
         outer.pack(fill="both", expand=True)
@@ -813,6 +949,10 @@ class SettingsUI:
         brand.grid(row=0, column=0, rowspan=2, sticky="w")
         ttk.Label(brand, text="Game Text Reader", style="HeaderTitle.TLabel").pack(anchor="w")
         ttk.Label(brand, text="Hear game dialogue and on-screen text instantly", style="HeaderSub.TLabel").pack(anchor="w", pady=(3, 0))
+        version_row = ttk.Frame(brand, style='Header.TFrame')
+        version_row.pack(anchor='w', pady=(5, 0))
+        ttk.Label(version_row, text=version_label(), style='HeaderMeta.TLabel').pack(side='left')
+        ttk.Button(version_row, text='About', style='Compact.TButton', command=self.show_about).pack(side='left', padx=8)
 
         appearance = ttk.Frame(header, style="Header.TFrame")
         appearance.grid(row=0, column=1, sticky="e")
@@ -945,6 +1085,9 @@ class SettingsUI:
         self.captured_text.grid(row=0, column=0, sticky="nsew")
         self.captured_scrollbar.grid(row=0, column=1, sticky="ns")
         self.captured_text.bind("<<Modified>>", self._captured_text_modified)
+        self.captured_text.bind('<Button-3>', self._reader_context_menu)
+        self.captured_text.bind('<Double-Button-1>', self._reader_double_click)
+        self.captured_text.bind('<Shift-F10>', self._reader_context_menu)
         self.captured_text.edit_modified(False)
         capture_actions = ttk.Frame(captured, style="CardInner.TFrame")
         capture_actions.grid(row=0, column=1, rowspan=2, sticky="e")
@@ -1148,6 +1291,8 @@ class SettingsUI:
         ttk.Button(again_actions, text="Clear", style="Compact.TButton", command=lambda: self.read_again_hotkey.set("")).pack(side="left", padx=(5, 0))
         self.apply_shortcuts_button = ttk.Button(keys, text="Apply shortcuts", style="Primary.TButton", command=self.apply_hotkeys)
         self.apply_shortcuts_button.grid(row=5, column=1, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Label(keys, textvariable=self.shortcut_edit_status, style="CardHint.TLabel",
+                  wraplength=220).grid(row=5, column=0, sticky="w", pady=(10, 0))
 
         ttk.Separator(keys).grid(
             row=6, column=0, columnspan=3, sticky="ew", pady=(18, 12)
@@ -1551,6 +1696,13 @@ class SettingsUI:
         self.clear_speech_progress()
         self.set_status("Speech stopped and the queue was cleared.")
 
+    def _shortcut_edits_changed(self, *_args: object) -> None:
+        values = (self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get())
+        self.shortcut_edit_status.set(
+            "Unapplied changes — click Apply shortcuts." if values != self._active_hotkey_values
+            else "These values are applied."
+        )
+
     def apply_hotkeys(self) -> None:
         """Register both shortcuts after saving the current voice settings."""
         self._save_voice_settings()
@@ -1848,6 +2000,20 @@ class SettingsUI:
         if hasattr(self, "details_button"):
             self.details_button.configure(state="normal" if result.raw_text else "disabled")
 
+    def _review_suggestion(self, snapshot: CorrectionResult, suggestion, alternative: str | None) -> bool:
+        """Reject old dialogs after a capture/edit, even when wording is identical."""
+        if self._last_result is not snapshot or self.captured_text.get("1.0", "end-1c") != snapshot.corrected_text.strip():
+            self.set_status("This review is out of date. Reopen Corrections for the current text.", error=True)
+            return False
+        updated = snapshot.review(suggestion, alternative)
+        if alternative is None:
+            self._last_result = updated
+        else:
+            self.on_review_result(updated)
+            self.set_last_result(updated)
+        self.set_status("Suggested correction applied." if alternative is not None else "Suggestion dismissed.")
+        return True
+
     def show_correction_details(self) -> None:
         """Open a readable raw/corrected/change view for the most recent capture."""
         result = self._last_result
@@ -1902,7 +2068,51 @@ class SettingsUI:
             highlightbackground=palette.border,
             highlightcolor=palette.accent,
         )
-        ttk.Button(frame, text="Close", command=window.destroy).grid(row=2, column=0, sticky="e", pady=(10, 0))
+        if result.suggestions:
+            review = ttk.Frame(frame)
+            review.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+            review.columnconfigure(0, weight=1)
+            ttk.Label(review, text="Needs review — uncertain text is unchanged until you apply a suggestion.",
+                      style="CardHint.TLabel", wraplength=680).grid(row=0, column=0, columnspan=3, sticky="w")
+            choices = ttk.Treeview(review, columns=("excerpt", "alternative"), show="headings", height=4)
+            choices.heading("excerpt", text="Source excerpt")
+            choices.heading("alternative", text="Suggested reading")
+            choices.column("excerpt", width=350)
+            choices.column("alternative", width=180)
+            choices.grid(row=1, column=0, columnspan=2, sticky="ew", pady=6)
+            ttk.Scrollbar(review, orient="vertical", command=choices.yview).grid(row=1, column=2, sticky="ns")
+            scrollbar = review.grid_slaves(row=1, column=2)[0]
+            choices.configure(yscrollcommand=scrollbar.set)
+            for i, item in enumerate(result.suggestions):
+                excerpt = result.corrected_text[max(0, item.start - 30):min(len(result.corrected_text), item.end + 30)]
+                choices.insert("", "end", iid=str(i), values=(excerpt.replace("\n", " "), " / ".join(item.alternatives)))
+            explanation = tk.StringVar()
+            alternative = tk.StringVar()
+            ttk.Label(review, textvariable=explanation, style="CardHint.TLabel", wraplength=680).grid(
+                row=2, column=0, columnspan=3, sticky="w")
+            selector = ttk.Combobox(review, textvariable=alternative, state="readonly")
+            selector.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+            def select(_event=None):
+                selection = choices.selection()
+                if selection:
+                    item = result.suggestions[int(selection[0])]
+                    explanation.set(item.reason)
+                    selector.configure(values=item.alternatives)
+                    alternative.set(item.alternatives[0])
+            def resolve(dismiss=False):
+                selection = choices.selection()
+                if selection and self._review_suggestion(result, result.suggestions[int(selection[0])],
+                                                          None if dismiss else alternative.get()):
+                    window.destroy()
+                    self.show_correction_details()
+            choices.bind("<<TreeviewSelect>>", select)
+            choices.selection_set("0")
+            select()
+            actions = ttk.Frame(review)
+            actions.grid(row=3, column=1, columnspan=2, sticky="e")
+            ttk.Button(actions, text="Apply", command=resolve).pack(side="left", padx=5)
+            ttk.Button(actions, text="Dismiss", command=lambda: resolve(True)).pack(side="left")
+        ttk.Button(frame, text="Close", command=window.destroy).grid(row=3, column=0, sticky="e", pady=(10, 0))
 
     def clear_text(self) -> None:
         self.on_clear_text()
@@ -1944,6 +2154,8 @@ class SettingsUI:
 
     def set_hotkey_status(self, active: bool, fixed: str = "", snippet: str = "", read_again: str = "") -> None:
         """Update the shortcut health badge after registration changes."""
+        self._active_hotkey_values = (fixed, snippet, read_again) if active else ("", "", "")
+        self._shortcut_edits_changed()
         if active:
             labels = "  /  ".join(item for item in (fixed, snippet, read_again) if item)
             self.hotkey_status.set(f"Shortcuts ready  •  {labels}")

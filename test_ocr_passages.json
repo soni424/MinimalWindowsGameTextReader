@@ -1,0 +1,62 @@
+[
+  {
+    "number": 1,
+    "raw": "I don't hove any more regrets.",
+    "expected": "I don't have any more regrets."
+  },
+  {
+    "number": 2,
+    "raw": "Let's go bock to the Matrix, okay?\n\nFine, do what you want!\nI'll go bock by myself!",
+    "expected": "Let's go back to the Matrix, okay?\n\nFine, do what you want!\nI'll go back by myself!"
+  },
+  {
+    "number": 3,
+    "raw": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI foiled, but...you can succeed.\nPromise me you'll live and moke it to Xion...\nThank you...Mory.",
+    "expected": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI failed, but...you can succeed.\nPromise me you'll live and make it to Xion...\nThank you...Mary."
+  },
+  {
+    "number": 4,
+    "raw": "Yohan... Why aren't you here?\nYou promised to be bock before sunrise.\nI'm so scored, Yohan.\nDon't leave me alone, please.",
+    "expected": "Yohan... Why aren't you here?\nYou promised to be back before sunrise.\nI'm so scared, Yohan.\nDon't leave me alone, please."
+  },
+  {
+    "number": 5,
+    "raw": "Take o hard, long look.\nThis land hos no hope.\nAll that's left is pain and death.\nEarth's finished...",
+    "expected": "Take a hard, long look.\nThis land has no hope.\nAll that's left is pain and death.\nEarth's finished..."
+  },
+  {
+    "number": 6,
+    "raw": "A pond in o cove...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling\nscraps or roaring of Noytibos. I've been looking for o place like that all my\nlife.\n\nVines, gropes, and o clear pond. I wish to see t\nt ace as I draw my last\nbreath. I want to forget about the painful realit",
+    "expected": "A pond in a cave...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling scraps or roaring of Naytibas. I've been looking for a place like that all my life.\n\nVines, grapes, and a clear pond. I wish to see that place as I draw my last breath. I want to forget about the painful reality..."
+  },
+  {
+    "number": 7,
+    "raw": "Don't blame yourself.\nYou don't become o Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, ond much more...\nThere's o lot o Scavenger needs to know to survive out there.\n\nWatch and learn!",
+    "expected": "Don't blame yourself.\nYou don't become a Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, and much more...\nThere's a lot a Scavenger needs to know to survive out there.\n\nWatch and learn!"
+  },
+  {
+    "number": 8,
+    "raw": "You're not o coward...\nDon't talk about yourself like that.\nIf you soy that one more time...\n\nI'll kick your oss.",
+    "expected": "You're not a coward...\nDon't talk about yourself like that.\nIf you say that one more time...\n\nI'll kick your ass."
+  },
+  {
+    "number": 9,
+    "raw": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nl...wont to go to space, too...",
+    "expected": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nI...want to go to space, too..."
+  },
+  {
+    "number": 10,
+    "raw": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou hove to survive! That's on order!",
+    "expected": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou have to survive! That's an order!"
+  },
+  {
+    "number": 11,
+    "raw": "Before I met you, l...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion...",
+    "expected": "Before I met you, I...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion..."
+  },
+  {
+    "number": 12,
+    "raw": "I'll hove to comp out here tonight.\nHopefully I'll find some intact circuits or valuable machine ports tomorrow...\nIf I find on Angel corpse, though, that'd be like\nIng the lottery... Heheh.",
+    "expected": "I'll have to camp out here tonight.\nHopefully I'll find some intact circuits or valuable machine parts tomorrow...\nIf I find an Angel corpse, though, that'd be like winning the lottery... Heheh."
+  }
+]

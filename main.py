@@ -118,6 +118,8 @@ class GameTextReaderApplication:
             on_fixed=self._fixed_hotkey_received,
             on_snippet=lambda: self._schedule(self.open_quick_snippet),
             on_read_again=lambda: self._schedule(self.read_again),
+            on_error=lambda message: self._schedule(lambda: self.ui.set_status(message, error=True)),
+            on_event=self._hotkey_debug,
         )
         self.ui = SettingsUI(
             self.root,
@@ -134,6 +136,8 @@ class GameTextReaderApplication:
             on_manual_text_changed=self.accept_manual_text,
             on_startup_changed=self.set_launch_at_startup,
             on_import_settings=self.import_older_settings,
+            on_seek=self.seek_reader,
+            on_review_result=self.accept_reviewed_result,
             on_profile_create=self.create_capture_profile,
             on_profile_rename=self.rename_capture_profile,
             on_profile_delete=self.delete_capture_profile,
@@ -295,12 +299,39 @@ class GameTextReaderApplication:
 
     def apply_hotkeys(self, fixed: str, snippet: str, read_again: str = "") -> None:
         """Register the requested global keys and persist them only after success."""
-        fixed_key, snippet_key, again_key = self.hotkeys.apply_all(fixed, snippet, read_again)
-        self.config.update(hotkeys={"fixed": fixed_key, "snippet": snippet_key, "read_again": again_key})
+        previous = self.config.get()['hotkeys']
+        try:
+            fixed_key, snippet_key, again_key = self.hotkeys.apply_all(fixed, snippet, read_again)
+            try:
+                self.config.update(hotkeys={"fixed": fixed_key, "snippet": snippet_key, "read_again": again_key})
+            except Exception:
+                self.hotkeys.apply_all(previous['fixed'], previous['snippet'], previous.get('read_again', ''))
+                raise
+        except Exception:
+            keys = self.hotkeys.active_keys
+            self.ui.set_hotkey_status(self.hotkeys.is_running, *keys)
+            raise
         self.ui.set_hotkeys(fixed_key, snippet_key, again_key)
         self.ui.set_hotkey_status(bool(fixed_key or snippet_key or again_key), fixed_key, snippet_key, again_key)
         if not fixed_key and not snippet_key and not again_key:
             self.ui.set_status("Global shortcuts are disabled. You can still use the buttons and tray menu.")
+
+    def _hotkey_debug(self, message: str) -> None:
+        if not self.config.get().get('ocr', {}).get('debug_logging'):
+            return
+        path = self.config.path.with_name('ocr_debug.log')
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            logger = logging.getLogger(f'game_text_reader.ocr.{path}')
+            if not logger.handlers:
+                handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=2, encoding='utf-8')
+                handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+                logger.addHandler(handler)
+                logger.setLevel(logging.INFO)
+                logger.propagate = False
+            logger.info('Shortcut: %s', message)
+        except OSError:
+            pass
 
     def set_shortcuts_paused(self, paused: bool) -> None:
         """Prevent an existing shortcut from firing while that same chord is recorded."""
@@ -415,7 +446,13 @@ class GameTextReaderApplication:
             if restore_settings_after and was_visible:
                 self.show_window()
 
-        self._overlay = QuickSnippetOverlay(self.root, captured, cancelled)
+        try:
+            self._overlay = QuickSnippetOverlay(self.root, captured, cancelled)
+            self._hotkey_debug('Snippet overlay opened')
+        except Exception as exc:
+            self._overlay = None
+            self.ui.set_status(f'Could not open snippet selector: {exc}', error=True)
+            self._hotkey_debug(f'Snippet overlay failed: {exc}')
 
     def read_fixed_box(self, hide_settings: bool = False, requested_at: float | None = None) -> None:
         """Capture and read the saved subtitle rectangle selected by the fixed hotkey."""
@@ -463,6 +500,17 @@ class GameTextReaderApplication:
         replace(document, settings["voice"], settings["rate"], settings["volume"])
         self.ui.set_status("Reading the last captured text again.")
 
+    def seek_reader(self, request_id: int, source_text: str, source_offset: int) -> None:
+        if source_text != self.text_state.last_successful_text:
+            return
+        ticket = self.tts.seek_to_source(request_id, source_text, source_offset)
+        if ticket is not None:
+            self.ui.set_status('Continuing from the selected word.')
+
+    def accept_reviewed_result(self, result: CorrectionResult) -> None:
+        self.tts.stop()
+        self.text_state.accept_success(result)
+
     def accept_manual_text(self, text: str) -> None:
         """Make the user's editor contents the authoritative Read Again text."""
 
@@ -496,8 +544,8 @@ class GameTextReaderApplication:
 
     def preload_correction_engine(self) -> None:
         """Avoid a first-read delay when dictionary correction is selected."""
-        strength = self.config.get().get("ocr", {}).get("strength")
-        if strength in {"balanced", "strong"}:
+        enabled = self.config.get().get("ocr", {}).get("enabled", True)
+        if enabled:
             threading.Thread(target=self.corrector.warm_up, name="ocr-dictionary-load", daemon=True).start()
 
     def _write_correction_debug(self, result: CorrectionResult) -> None:
@@ -511,7 +559,10 @@ class GameTextReaderApplication:
             handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
             logger.addHandler(handler)
         changes = "; ".join(f"{item.original!r} -> {item.replacement!r} ({item.reason})" for item in result.corrections) or "none"
-        logger.info("Raw OCR:\n%s\nCorrected:\n%s\nCorrections: %s", result.raw_text, result.corrected_text, changes)
+        suggestions = "; ".join(f"{item.original!r} -> {item.alternatives!r} ({item.reason})"
+                                for item in result.suggestions) or "none"
+        logger.info("Raw OCR:\n%s\nCorrected:\n%s\nCorrections: %s\nNeeds review: %s",
+                    result.raw_text, result.corrected_text, changes, suggestions)
 
     def _write_performance_debug(self, timings: dict[str, float]) -> None:
         log_path = self.config.path.with_name("ocr_debug.log")

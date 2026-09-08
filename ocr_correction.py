@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.resources import files
 from threading import Lock
 from typing import Any, Final, Mapping
+from ocr_context import analyze
 
 try:
     from symspellpy import SymSpell, Verbosity
@@ -85,6 +86,18 @@ class TextCorrection:
 
 
 @dataclass(frozen=True)
+class CorrectionSuggestion:
+    """A proposal in corrected-text coordinates, with original OCR provenance."""
+    start: int
+    end: int
+    original: str
+    alternatives: tuple[str, ...]
+    reason: str
+    raw_start: int = 0
+    raw_end: int = 0
+
+
+@dataclass(frozen=True)
 class CorrectionResult:
     """Raw and corrected forms plus diagnostics for one OCR result."""
 
@@ -92,10 +105,31 @@ class CorrectionResult:
     corrected_text: str
     corrections: tuple[TextCorrection, ...]
     elapsed_ms: float
+    suggestions: tuple[CorrectionSuggestion, ...] = ()
 
     @property
     def changed(self) -> bool:
         return self.raw_text != self.corrected_text
+
+    def review(self, suggestion: CorrectionSuggestion, alternative: str | None) -> "CorrectionResult":
+        """Accept one occurrence or dismiss it, without losing raw provenance."""
+        if suggestion not in self.suggestions or self.corrected_text[suggestion.start:suggestion.end] != suggestion.original:
+            raise ValueError("This suggestion is no longer current. Reopen Corrections.")
+        remaining = tuple(item for item in self.suggestions if item != suggestion)
+        if alternative is None:
+            return replace(self, suggestions=remaining)
+        if alternative not in suggestion.alternatives:
+            raise ValueError("Choose one of the supported alternatives.")
+        start, end = suggestion.start, suggestion.end
+        delta = len(alternative) - (end - start)
+        remaining = tuple(
+            replace(item, start=item.start + delta, end=item.end + delta) if item.start >= end else item
+            for item in remaining if item.end <= start or item.start >= end
+        )
+        change = TextCorrection(suggestion.raw_start, suggestion.raw_end, suggestion.original,
+                                alternative, suggestion.reason, 1.0, "review")
+        return replace(self, corrected_text=self.corrected_text[:start] + alternative + self.corrected_text[end:],
+                       corrections=self.corrections + (change,), suggestions=remaining)
 
 
 @dataclass(frozen=True)
@@ -188,7 +222,7 @@ class OcrCorrector:
         started = time.perf_counter()
         raw = str(raw_text or "")
         settings = options or CorrectionOptions()
-        if not settings.enabled or not raw:
+        if not raw:
             return CorrectionResult(raw, raw, (), (time.perf_counter() - started) * 1000.0)
 
         text = raw
@@ -202,9 +236,18 @@ class OcrCorrector:
             text, raw_map, stage_trace = self._apply_stage(text, raw_map, edits)
             traced.extend(stage_trace)
 
+        if not settings.enabled:
+            return CorrectionResult(raw, text, tuple(traced), (time.perf_counter() - started) * 1000.0)
+
         protected = self._protected_ranges(text, settings)
         contextual = self._contextual_corrections(text, protected)
         text, raw_map, stage_trace = self._apply_stage(text, raw_map, contextual)
+        traced.extend(stage_trace)
+
+        candidates = analyze(text, self._get_symspell(), self._protected_ranges(text, settings), settings.strength)
+        edits = [TextCorrection(p.start, p.end, text[p.start:p.end], p.replacement,
+                                p.reason, p.confidence) for p in candidates if p.automatic]
+        text, raw_map, stage_trace = self._apply_stage(text, raw_map, edits)
         traced.extend(stage_trace)
 
         if settings.strength in {"balanced", "strong"}:
@@ -216,7 +259,11 @@ class OcrCorrector:
             text, raw_map, stage_trace = self._apply_stage(text, raw_map, spacing)
             traced.extend(stage_trace)
         traced.sort(key=lambda item: (item.start, item.end, 0 if item.source == "custom" else 1))
-        return CorrectionResult(raw, text, tuple(traced), (time.perf_counter() - started) * 1000.0)
+        suggestions = tuple(CorrectionSuggestion(p.start, p.end, text[p.start:p.end], (p.replacement,), p.reason,
+                                                raw_map[p.start][0], raw_map[p.end - 1][1])
+                            for p in analyze(text, self._get_symspell(), self._protected_ranges(text, settings), settings.strength)
+                            if not p.automatic)
+        return CorrectionResult(raw, text, tuple(traced), (time.perf_counter() - started) * 1000.0, suggestions)
 
     def _get_symspell(self):
         if self._symspell is not None:
@@ -277,7 +324,7 @@ class OcrCorrector:
                 continue
             original = match.group(0)
             # Mixed capitals are often item IDs or deliberately styled game terms.
-            if original.isupper() or (not original.islower() and not original.istitle()):
+            if not original.islower() or original in engine.words:
                 continue
 
             lookup = engine.lookup(
@@ -287,7 +334,12 @@ class OcrCorrector:
                 include_unknown=True,
             )
             suggestion = lookup[0] if lookup else None
-            if suggestion and suggestion.distance and suggestion.distance <= max_distance and suggestion.count >= 10_000:
+            if (suggestion and suggestion.distance and suggestion.distance <= max_distance and suggestion.count >= 10_000
+                    and original.lower() not in engine.words
+                    and any(engine.bigrams.get(prefix + ' ' + suggestion.term, 0) > 10000
+                            for prefix in re.findall(r'[a-z]+', text[max(0, start - 15):start].lower())[-1:])
+                    and any(a in original and original.replace(a, b, 1) == suggestion.term
+                            for a, b in (('l', 'i'), ('rn', 'm'), ('cl', 'd'), ('vv', 'w')))):
                 replacement = self._transfer_case(original, suggestion.term)
                 proposed.append(
                     TextCorrection(

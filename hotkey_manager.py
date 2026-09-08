@@ -134,12 +134,14 @@ class _NativeHotkeyThread(threading.Thread):
     WM_QUIT = 0x0012
     MOD_NOREPEAT = 0x4000
 
-    def __init__(self, bindings: dict[int, tuple[_ParsedHotkey, Callable[[], None]]]) -> None:
+    def __init__(self, bindings: dict[int, tuple[_ParsedHotkey, Callable[[], None]]], on_error=None, on_event=None) -> None:
         super().__init__(name="global-hotkeys", daemon=True)
         self.bindings = bindings
         self.ready = threading.Event()
         self.error: str | None = None
         self.thread_id = 0
+        self.on_error = on_error or (lambda _message: None)
+        self.on_event = on_event or (lambda _message: None)
 
     def run(self) -> None:
         if os.name != "nt":
@@ -162,21 +164,28 @@ class _NativeHotkeyThread(threading.Thread):
                         self.error = f"Windows could not register {parsed.display} (error {error_code})."
                     return
                 registered.append(identifier)
+                self.on_event(f'Registered {parsed.display}')
             self.ready.set()
             while True:
                 status = user32.GetMessageW(ctypes.byref(message), None, 0, 0)
-                if status <= 0:
+                if status < 0:
+                    self.error = f"Windows shortcut listener failed (error {ctypes.get_last_error()})."
+                    self.on_error(self.error)
+                    break
+                if status == 0:
                     break
                 if message.message == self.WM_HOTKEY:
                     binding = self.bindings.get(int(message.wParam))
                     if binding:
                         try:
+                            self.on_event(f'Received {binding[0].display}')
                             binding[1]()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            self.on_error(f'Shortcut {binding[0].display} failed: {exc}')
         finally:
             for identifier in registered:
                 user32.UnregisterHotKey(None, identifier)
+                self.on_event(f'Unregistered {self.bindings[identifier][0].display}')
             self.ready.set()
 
     def request_stop(self) -> None:
@@ -195,12 +204,20 @@ class HotkeyManager:
         on_fixed: Callable[[], None],
         on_snippet: Callable[[], None],
         on_read_again: Callable[[], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
+        on_event: Callable[[str], None] | None = None,
     ) -> None:
         self._callbacks = (on_fixed, on_snippet, on_read_again or (lambda: None))
         self._listener: _NativeHotkeyThread | None = None
         self._bindings: tuple[_ParsedHotkey | None, ...] = (None, None, None)
         self._lock = threading.RLock()
         self.is_running = False
+        self._on_error = on_error
+        self._on_event = on_event
+
+    @property
+    def active_keys(self) -> tuple[str, ...]:
+        return tuple(item.display if item else '' for item in self._bindings) if self.is_running else ('', '', '')
 
     def _start(self, parsed_bindings: tuple[_ParsedHotkey | None, ...]) -> None:
         active = {
@@ -213,10 +230,13 @@ class HotkeyManager:
             self._bindings = parsed_bindings
             self.is_running = False
             return
-        listener = _NativeHotkeyThread(active)
+        listener = _NativeHotkeyThread(active, self._on_error, self._on_event)
         listener.start()
         if not listener.ready.wait(3):
             listener.request_stop()
+            listener.join(timeout=2)
+            if listener.is_alive():
+                self._listener = listener
             raise HotkeyError("Windows did not respond while registering the shortcuts.")
         if listener.error:
             listener.join(timeout=1)
@@ -250,6 +270,8 @@ class HotkeyManager:
             try:
                 self._start(requested)
             except Exception:
+                if self._listener is not None and self._listener.is_alive():
+                    raise
                 try:
                     self._start(previous)
                 except Exception:
@@ -266,3 +288,7 @@ class HotkeyManager:
             if listener is not None:
                 listener.request_stop()
                 listener.join(timeout=2)
+                if listener.is_alive():
+                    self._listener = listener
+                    self.is_running = True
+                    raise HotkeyError('Windows has not released the old shortcuts. Try Apply again.')

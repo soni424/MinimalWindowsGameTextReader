@@ -17,7 +17,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-from speech_text import SpeechDocument, SpeechWordSpan
+from speech_text import SpeechDocument, SpeechWordSpan, prepare_for_speech, native_offset_map
+from datetime import timedelta
 
 
 # Import pywin32's COM module before any speech worker is started.  Loading the
@@ -37,6 +38,21 @@ MIN_MAX_OVERLAP = 2
 MAX_MAX_OVERLAP = 4
 _MAX_RETIRED_PLAYERS = 3
 _PLAYBACK_RETIRE_GRACE_SECONDS = 0.5
+_speech_runtime_threads = threading.local()
+
+
+def _ensure_speech_runtime() -> None:
+    """Keep a WinRT-owned apartment alive for this thread's native objects."""
+    if getattr(_speech_runtime_threads, "ready", False):
+        return
+    from winrt.runtime import ApartmentType, init_apartment
+    try:
+        init_apartment(ApartmentType.MULTI_THREADED)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != -2147417850:
+            raise
+        init_apartment(ApartmentType.SINGLE_THREADED)
+    _speech_runtime_threads.ready = True
 
 
 @dataclass
@@ -91,6 +107,7 @@ class _SpeechRequest:
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
     source_text: str = ""
     word_spans: tuple[SpeechWordSpan, ...] = ()
+    native_offsets: tuple[int, ...] = ()
 
 
 class _SapiWordEventSink:
@@ -129,6 +146,8 @@ class _SpeechCommand:
     replace: bool = False
     mode: str = ""
     max_overlap: int = DEFAULT_MAX_OVERLAP
+    target_id: int = 0
+    source_offset: int = 0
 
 
 class _SpeechSession(Protocol):
@@ -611,6 +630,27 @@ class _WindowsSpeechSession:
         except Exception:
             return ()
 
+    def seek(self, spoken_offset: int) -> bool:
+        """Seek on the owning worker without replacing the synthesized stream."""
+        channel = self._winrt_current_channel
+        if channel is None or channel.finished.is_set() or channel.failed.is_set():
+            return False
+        timing_index = next((i for i, word in enumerate(channel.word_timings)
+                             if word.spoken_start <= spoken_offset < word.spoken_end), None)
+        if timing_index is None:
+            return False
+        playback = channel.player.playback_session
+        if not playback.can_seek:
+            return False
+        target = channel.word_timings[timing_index].seconds
+        channel.player.pause()
+        playback.position = timedelta(seconds=target)
+        channel.next_word_timing = timing_index
+        duration = playback.natural_duration.total_seconds()
+        self._winrt_deadline = time.monotonic() + max(1.0, duration - target + 2.0)
+        channel.player.play()
+        return True
+
     def drain_word_events(self) -> tuple[tuple[int, int], ...]:
         """Return the newest word crossed by the active playback position."""
 
@@ -744,6 +784,9 @@ class TtsEngine:
         self._on_finished_with_id = on_finished_with_id
         self._on_document_started_with_id = on_document_started_with_id
         self._on_word_with_id = on_word_with_id
+        self._latest_seek_id = 0
+        self._discard_before_id = 0
+        self._seek_aliases: dict[int, int] = {}
         self._initial_voice_id = initial_voice_id
         self._session_factory = session_factory or _WindowsSpeechSession
         self._requests: queue.Queue[_SpeechCommand | None] = queue.Queue(maxsize=128)
@@ -769,7 +812,9 @@ class TtsEngine:
         """List OneCore/WinRT and SAPI voices, including Natural voices."""
         voices: list[Voice] = []
         seen: set[tuple[str, str]] = set()
+        voice = None
         try:
+            _ensure_speech_runtime()
             from winrt.windows.media.speechsynthesis import SpeechSynthesizer
 
             for voice in SpeechSynthesizer.all_voices:
@@ -789,13 +834,24 @@ class TtsEngine:
                 )
         except Exception:
             pass
+        finally:
+            voice = None
 
         try:
             import win32com.client
 
             if _PYTHONCOM is None:
                 return voices
-            _PYTHONCOM.CoInitialize()
+            com_owned = False
+            try:
+                _PYTHONCOM.CoInitializeEx(_PYTHONCOM.COINIT_MULTITHREADED)
+                com_owned = True
+            except _PYTHONCOM.com_error as exc:
+                # CoInitialize silently ignores RPC_E_CHANGED_MODE. Calling
+                # CoUninitialize after that would tear down PyWinRT's apartment.
+                if exc.hresult != -2147417850:
+                    raise
+            speaker = collection = token = None
             try:
                 speaker = win32com.client.Dispatch("SAPI.SpVoice")
                 collection = speaker.GetVoices()
@@ -814,7 +870,11 @@ class TtsEngine:
                             )
                         )
             finally:
-                _PYTHONCOM.CoUninitialize()
+                # Third-party enumerators may own apartment-bound objects.
+                # Release them before tearing down COM, not at function return.
+                token = collection = speaker = None
+                if com_owned:
+                    _PYTHONCOM.CoUninitialize()
         except Exception:
             pass
         return voices
@@ -900,6 +960,7 @@ class TtsEngine:
             completion=done,
             source_text=source_text,
             word_spans=word_spans,
+            native_offsets=native_offset_map(clean),
         )
         if self._shutdown.is_set():
             request.cancel.set()
@@ -989,10 +1050,35 @@ class TtsEngine:
     def wait_until_ready(self, timeout: float = 5.0) -> bool:
         return self._ready.wait(max(0.0, timeout))
 
+    def seek_to_source(self, request_id: int, source_text: str, source_offset: int) -> SpeechTicket | None:
+        """Schedule a seek; Tk never accesses native media objects directly."""
+        with self._current_lock:
+            for _ in range(128):
+                if request_id not in self._seek_aliases:
+                    break
+                request_id = self._seek_aliases[request_id]
+            active = self._active_requests.get(request_id)
+            if active is None or active.cancel.is_set() or active.source_text != source_text:
+                return None
+            if not 0 <= source_offset < len(source_text):
+                return None
+            self._next_request_id += 1
+            identifier = self._next_request_id
+            self._latest_seek_id = identifier
+            self._discard_before_id = identifier
+            ticket = SpeechTicket(identifier)
+            request = _SpeechRequest(identifier, active.text, active.voice_id, active.rate, active.volume,
+                                     mode='replace', generation=self._generation, completion=ticket,
+                                     source_text=source_text, word_spans=active.word_spans,
+                                     native_offsets=active.native_offsets)
+        self._put_command(_SpeechCommand('seek', request, target_id=request_id, source_offset=source_offset))
+        return ticket
+
     def stop(self) -> None:
         """Interrupt all active playback and discard waiting speech."""
         with self._current_lock:
             self._generation += 1
+            self._seek_aliases.clear()
             current_requests = list(self._active_requests.values())
             if self._current_request is not None and self._current_request not in current_requests:
                 current_requests.append(self._current_request)
@@ -1107,6 +1193,10 @@ class TtsEngine:
     ) -> None:
         if self._on_word_with_id is None or not request.word_spans:
             return
+        if request.native_offsets:
+            positions = request.native_offsets
+            spoken_start = positions[min(max(0, spoken_start), len(positions) - 1)]
+            spoken_end = positions[min(max(0, spoken_end), len(positions) - 1)]
         matched = next(
             (
                 word
@@ -1204,7 +1294,7 @@ class TtsEngine:
 
     def _start_request(self, request: _SpeechRequest, *, replace: bool = False) -> _SpeechRequest | None:
         with self._current_lock:
-            if request.cancel.is_set() or request.generation != self._generation:
+            if request.cancel.is_set() or request.generation != self._generation or request.request_id < self._discard_before_id:
                 self._cancel_queued(request)
                 return None
         try:
@@ -1232,6 +1322,9 @@ class TtsEngine:
         self,
         request: _SpeechRequest,
     ) -> tuple[_SpeechRequest, _SpeechSession] | None:
+        if request.cancel.is_set() or request.generation != self._generation or request.request_id < self._discard_before_id:
+            self._cancel_queued(request)
+            return None
         try:
             session = self._session_factory()
         except Exception as exc:
@@ -1288,9 +1381,13 @@ class TtsEngine:
 
     def _run(self) -> None:
         pythoncom = _PYTHONCOM
+        try:
+            _ensure_speech_runtime()
+        except (ImportError, OSError):
+            pass
         if pythoncom is not None:
             try:
-                pythoncom.CoInitialize()
+                pythoncom.CoInitializeEx(pythoncom.COINIT_MULTITHREADED)
             except Exception:
                 pythoncom = None  # type: ignore[assignment]
         try:
@@ -1354,10 +1451,75 @@ class TtsEngine:
                             for request, session in list(overlap_active.values()):
                                 self._finish_overlap(request, session, stop_backend=True)
                             overlap_active.clear()
+                        elif command.kind == 'seek' and command.request is not None:
+                            sought = command.request
+                            target_id = command.target_id
+                            with self._current_lock:
+                                for _ in range(128):
+                                    if target_id not in self._seek_aliases:
+                                        break
+                                    target_id = self._seek_aliases[target_id]
+                            target = active if active and active.request_id == target_id else None
+                            target_session = self._session if target else None
+                            if target_id in overlap_active:
+                                target, target_session = overlap_active[target_id]
+                            if (target is None or target_session is None or target.cancel.is_set()
+                                    or sought.request_id != self._latest_seek_id
+                                    or sought.generation != self._generation):
+                                self._cancel_queued(sought)
+                                continue
+                            self._cancel_queued(pending)
+                            pending = None
+                            self._set_pending(None)
+                            for queued in overlap_pending:
+                                self._cancel_queued(queued)
+                            overlap_pending.clear()
+                            if active is not None and active is not target:
+                                self._finish_active(active, stop_backend=True)
+                            for old_id, (other, other_session) in list(overlap_active.items()):
+                                if other is not target:
+                                    self._finish_overlap(other, other_session, stop_backend=True)
+                                overlap_active.pop(old_id, None)
+                            self._finish_request(target)
+                            if self._session is not None and self._session is not target_session:
+                                try:
+                                    self._session.close()
+                                except Exception:
+                                    pass
+                            self._session = target_session
+                            word = next((w for w in target.word_spans
+                                         if w.source_start <= command.source_offset < w.source_end), None)
+                            moved = False
+                            if word is not None and callable(getattr(target_session, 'seek', None)):
+                                try:
+                                    native_start = len(target.text[:word.spoken_start].encode('utf-16-le')) // 2
+                                    moved = target_session.seek(native_start)
+                                except Exception:
+                                    moved = False
+                            with self._current_lock:
+                                self._seek_aliases[target.request_id] = sought.request_id
+                                if len(self._seek_aliases) > 128:
+                                    self._seek_aliases.pop(next(iter(self._seek_aliases)))
+                            if moved:
+                                active = sought
+                                self._unregister_overlap(target)
+                                self._set_active(sought)
+                                self._notify_started(sought)
+                            else:
+                                try:
+                                    target_session.stop()
+                                except Exception:
+                                    pass
+                                suffix = prepare_for_speech(sought.source_text).from_source(command.source_offset)
+                                sought.text = suffix.spoken_text
+                                sought.word_spans = suffix.words
+                                sought.native_offsets = native_offset_map(sought.text)
+                                self._unregister_overlap(target)
+                                active = self._start_request(sought, replace=True)
                         elif command.kind == "speak" and command.request is not None:
                             request = command.request
                             with self._current_lock:
-                                stale = request.generation != self._generation
+                                stale = request.generation != self._generation or request.request_id < self._discard_before_id
                             if stale or request.cancel.is_set():
                                 self._cancel_queued(request)
                             elif request.mode == "overlap":

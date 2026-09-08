@@ -2,9 +2,31 @@
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import collect_dynamic_libs
 from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.win32.versioninfo import VSVersionInfo, FixedFileInfo, StringFileInfo, StringTable, StringStruct, VarFileInfo, VarStruct
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, SPECPATH)
+from app_version import APP_VERSION, FILE_VERSION, source_build_info
+
+metadata = source_build_info()
+metadata_path = Path(workpath) / 'build_info.json'
+metadata_path.parent.mkdir(parents=True, exist_ok=True)
+metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+version_resource = VSVersionInfo(
+    ffi=FixedFileInfo(filevers=FILE_VERSION, prodvers=FILE_VERSION, mask=0x3f, flags=0, OS=0x40004, fileType=1, subtype=0, date=(0, 0)),
+    kids=[StringFileInfo([StringTable('040904B0', [
+        StringStruct('FileDescription', 'Game Text Reader'),
+        StringStruct('FileVersion', APP_VERSION),
+        StringStruct('ProductVersion', APP_VERSION),
+        StringStruct('ProductName', 'Game Text Reader'),
+        StringStruct('Comments', metadata['build']),
+    ])]), VarFileInfo([VarStruct('Translation', [1033, 1200])])],
+)
 
 
 datas = [("assets", "assets")]
+datas.append((str(metadata_path), '.'))
 binaries = []
 hiddenimports = []
 binaries += collect_dynamic_libs("winrt")
@@ -42,6 +64,7 @@ exe = EXE(
     exclude_binaries=True,
     name="GameTextReader",
     icon="assets/app_icon.ico",
+    version=version_resource,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

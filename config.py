@@ -511,17 +511,15 @@ class ConfigStore:
     def save(self, data: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Atomically save settings and return the normalised value that was written."""
         with self._lock:
-            if data is not None:
-                self._data = validate_config(data)
-            else:
-                self._data = validate_config(self._data)
+            validated = validate_config(data if data is not None else self._data)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.path.with_suffix(self.path.suffix + ".tmp")
             try:
                 with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-                    json.dump(self._data, handle, indent=2, ensure_ascii=False)
+                    json.dump(validated, handle, indent=2, ensure_ascii=False)
                     handle.write("\n")
                 os.replace(temporary, self.path)
+                self._data = validated
             finally:
                 if temporary.exists():
                     try:

@@ -39,7 +39,18 @@ python main.py
 
 The first run opens settings and creates a tray icon. Closing the settings window minimizes it normally. Choose **Hide settings to tray** from the tray menu only when you explicitly want to remove it from the taskbar; use **Quit** to exit fully.
 
-## What's new in v1.1.1
+## What's new
+
+### Development build: 1.2.0-dev
+
+- Double-click a word during reading to seek forward or backward to that occurrence.
+- Right-click reader text for clipboard actions, **Replace Word…**, or **Add to Replacement Rules…**.
+- Stronger offline contextual corrections, with uncertain alternatives in **Corrections → Needs review**.
+- Fixed released-modifier recording and made pending shortcut changes distinct from active shortcuts.
+- Dark scrollbars now retain their theme with empty/short text and during hover or dragging.
+- The header and **About** show the version/build, application location, and settings location.
+
+### Previous release: 1.1.1
 
 - Added a shared application icon for the window, taskbar, system tray, and packaged executable.
 - Replaced light native profile prompts with dialogs that follow the current appearance.
@@ -61,13 +72,19 @@ Capture profiles can be created, renamed, deleted, and switched without a profil
 
 The **OCR corrections** tab controls an offline post-processing stage. The original Windows OCR result is retained, while the corrected result is displayed, copied, and spoken.
 
-- **Conservative** (default) fixes only high-confidence context mistakes such as `I sow it` → `I saw it`, `In o second` → `In a second`, and common `I/l/1`, `S/5`, or `h/b` errors.
+- **Conservative** (default) fixes strongly supported context mistakes such as `I sow it` → `I saw it`, `don't hove` → `don't have`, `go bock` → `go back`, `I'm so scored` → `I'm so scared`, and common `I/l/1`, `S/5`, or `h/b` errors.
 - **Balanced** also uses a bundled English frequency dictionary to repair likely one-character mistakes, joined words, letter/digit confusions, and safe punctuation spacing. Its dictionary loads in the background.
 - **Strong** permits wider dictionary matches and is best used with protected terms.
 - Custom replacement rules run first. Each rule can be enabled separately and can match whole words, exact case, or any case.
+- Disabling automatic correction suppresses automatic changes and review suggestions; individually enabled custom replacement rules still run. Their output is protected from subsequent automatic correction.
 - The **▶ Play** buttons beside **Text detected by OCR** and **Replace it with** preview either field using the selected voice, speed, and the same safe 60% preview-volume cap as **Test selected voice**. Previewing does not save or change the rule.
 - Protected terms keep character names, locations, item names, and game-specific vocabulary unchanged.
 - Select **Corrections** beside the latest result to compare raw and corrected text and see why every change was made.
+- **Needs review** shows an excerpt, supported alternative, and explanation. **Apply** changes only that occurrence and retains the raw OCR and change history. **Dismiss** leaves the text unchanged. Suggestions are temporary and become invalid after a new capture or manual edit; use Replacement Rules for permanent changes.
+
+The scorer combines character-confusion candidates, grammatical patterns, nearby phrase frequencies, and evidence from names elsewhere in the passage. Frequency alone does not trigger an automatic edit. Unfamiliar capitalized names such as Xion and Yohan are not normalized to dictionary words. Unknown game terms such as Noytibos remain unchanged unless a custom rule or explicit passage evidence identifies the intended spelling.
+
+Ambiguous real words such as cove/cave and machine ports/parts, or heavily missing wording such as `t / t ace`, may be suggested for review rather than inserted into speech. This is bounded offline correction, not a general semantic reconstruction model. Windows OCR supplies no per-word confidence; correction evidence scores are not OCR confidence measurements.
 
 Correction debug logging is optional. When enabled, a size-limited `ocr_debug.log` is written next to `config.json`; normal UI status stays concise.
 
@@ -81,6 +98,8 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 - Enable **Launch when I sign in to Windows** in that tab to start quietly in the system tray with global shortcuts ready. It applies to the current Windows account and does not require administrator access.
 - **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
 - During a capture or **Read Again**, the current visible row is shaded blue and the spoken word is highlighted in gold. Long text scrolls automatically. With overlapping voices, the newest reading owns the highlight.
+- While that visible passage is being read, double-click a word to continue from that exact occurrence. Seeking stops other voices and discards pending readings, but does not change your saved speech mode. It uses the existing audio stream when seeking and word timings are available; otherwise it synthesizes only the suffix from the selected word. When idle, double-click retains normal word selection.
+- Right-click a selection (or a word under the pointer) for **Copy**, **Cut**, **Paste**, **Select All**, **Replace Word…**, and **Add to Replacement Rules…**. Both rule actions open the existing dialog with pronunciation previews. Replace Word saves a rule and replaces just the selected occurrence; Add to Replacement Rules only saves it for future OCR. An existing matching rule is edited instead of duplicated. Cancel makes no changes.
 - Speed and volume changes are saved automatically, including changes made with the sliders.
 - **Test selected voice** uses a 60% preview cap to avoid an unexpected blast; normal reads still use the saved volume.
 - OCR line layout is retained in displayed and copied text. For speech, ordinary wrapped lines remain continuous, while headings, visually separate blocks, and bullet items receive natural punctuation pauses; bullet symbols themselves are not spoken.
@@ -91,6 +110,8 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 Global shortcut reads minimize settings without hiding them to the tray. One persistent OCR worker replaces obsolete pending jobs and publishes only the newest result. Speech uses bounded playback sessions: replace mode keeps one newest line, queue mode keeps one next line, and overlap mode starts separate sessions up to the configured limit. SAPI voices are synthesized into memory before MediaPlayer playback, so rapid captures do not repeatedly purge a live SAPI audio device. Replacements use an isolated MediaPlayer channel and keep the previous stream alive briefly while Windows finishes its asynchronous handoff, preventing transition bursts.
 
 Choose **Record** beside Read Fixed Box, Select a Snippet, or the optional Read Again shortcut, then press any supported Windows combination such as `Ctrl+Shift+T`, `Alt+Q`, `Shift+F8`, or `Ctrl+Shift+Space`. Shortcuts can be cleared individually. Windows registration detects conflicts with this app and other programs before a setting is saved; `F12` is rejected because Windows reserves it.
+
+Click **Apply shortcuts** after recording or clearing a shortcut. The form marks unapplied changes, while the header continues showing the active combination. Apply unregisters the old set, registers the complete new set, and only then saves; failures restore the previous working set where possible and report the actual registration status. If a custom snippet key still fails, check the header build and executable location in **About**, exit older running copies, and enable OCR debug logging to record registration, key dispatch, and snippet-overlay launch events.
 
 Windows OCR, its event loop, SAPI voice tokens/player, and WinRT synthesizer/media player remain alive on their dedicated workers for repeated dialogue captures. When OCR debug logging is enabled, the same rotating log includes measured dispatch, capture, OCR, correction, and speech-start timings.
 
@@ -116,6 +137,7 @@ python -m PyInstaller GameTextReader.spec --noconfirm
 
 The packaged application is created in `dist/GameTextReader`.
 Release packages should not contain `config.json`; each user's settings are created in Windows AppData on first launch.
+The tracked version in `app_version.py` is shared by the header and executable metadata. Packaging freezes a UTC timestamp/source-revision build identifier into `_internal/build_info.json`; Git is not needed to identify a packaged build. A development build made from uncommitted changes is marked `dirty`.
 
 ## Verify
 
