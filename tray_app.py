@@ -20,6 +20,7 @@ class TrayApp:
         *,
         on_hide: Callable[[], None] | None = None,
         on_read_again: Callable[[], None] | None = None,
+        on_toggle_auto_read: Callable[[], None] | None = None,
     ) -> None:
         self._callbacks = {
             "show": on_show,
@@ -32,6 +33,8 @@ class TrayApp:
             self._callbacks["hide"] = on_hide
         if on_read_again is not None:
             self._callbacks["again"] = on_read_again
+        if on_toggle_auto_read is not None:
+            self._callbacks["auto"] = on_toggle_auto_read
         self._icon = None
 
     @staticmethod
@@ -55,6 +58,10 @@ class TrayApp:
                     pystray.MenuItem("Show settings", lambda *_: self._invoke("show"), default=True),
                     pystray.Menu.SEPARATOR,
                     pystray.MenuItem("Read fixed box now", lambda *_: self._invoke("fixed")),
+                    *(
+                        [pystray.MenuItem("Start / stop Auto-Read", lambda *_: self._invoke("auto"))]
+                        if "auto" in self._callbacks else []
+                    ),
                     pystray.MenuItem("Quick snippet", lambda *_: self._invoke("snippet")),
                     *(
                         [pystray.MenuItem("Read last text again", lambda *_: self._invoke("again"))]

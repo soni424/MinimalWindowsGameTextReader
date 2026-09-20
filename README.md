@@ -7,6 +7,7 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 ## Highlights
 
 - Reads a reusable fixed screen region or a one-time snippet selection.
+- Optionally watches the fixed box and reads stable new dialogue automatically while its game is foreground.
 - Reads text you type or paste into the editable result box.
 - Follows speech with a highlighted visible row and current word.
 - Uses offline Windows OCR and installed Windows speech voices.
@@ -42,6 +43,12 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.2-dev
+
+- Added **Start Auto-Read** beside the fixed capture controls, a tray toggle, and an optional configurable global shortcut (unassigned by default).
+- Auto-Read watches the selected profile's saved box without an overlay. It waits for the game window, pauses on Alt-Tab, requires two matching OCR reads before speaking, and avoids repeating unchanged dialogue.
+- Auto-Read is off at every launch. **Stop audio** also stops watching; manual fixed-box and snippet reads still work as before.
+
 ### Development build: 1.2.1-dev
 
 - Added **Reader → Text extraction → Standard / Enhanced** for both fixed-box and snippet captures. Standard remains the default.
@@ -72,6 +79,8 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 3. Press the Fixed Box hotkey (default `Alt+Z`) to OCR and read the selected profile's area.
 4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
 5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
+
+For hands-free dialogue, select a tightly framed saved capture area around the game's dialogue text, then choose **Start Auto-Read** in the Reader tab (or the tray menu). If settings are in front, return to the game within 30 seconds; starting through an assigned Auto-Read shortcut while in the game binds it immediately. The app watches that one game window only, checks the box roughly every 350 ms, and speaks a line after the image and corrected OCR text settle. A new confirmed line replaces the previous Auto-Read voice. It pauses new captures when you switch away and resumes when you return. Stop it with the same button/shortcut/tray action or **Stop audio**. Auto-Read reads voiced and unvoiced game dialogue alike; it cannot detect whether the game itself is speaking. An identical line must disappear long enough for two blank OCR checks before it can be read again.
 
 **Exclusive fullscreen games:** **Select a Snippet** opens a visual selection overlay, which may cause a true exclusive-fullscreen game to minimize or leave fullscreen. Use **Borderless** or **Windowed Fullscreen** in the game's display settings for snippet selection. If you prefer exclusive fullscreen, use a saved **Read Fixed Box** area instead; it captures without opening the selection overlay. This is a Windows fullscreen/overlay limitation, not specific to one game; see [Microsoft's DXGI fullscreen guidance](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/d3d10-graphics-programming-guide-dxgi).
 
@@ -120,7 +129,7 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 
 Global shortcut reads minimize settings without hiding them to the tray. One persistent OCR worker replaces obsolete pending jobs and publishes only the newest result. Speech uses bounded playback sessions: replace mode keeps one newest line, queue mode keeps one next line, and overlap mode starts separate sessions up to the configured limit. SAPI voices are synthesized into memory before MediaPlayer playback, so rapid captures do not repeatedly purge a live SAPI audio device. Replacements use an isolated MediaPlayer channel and keep the previous stream alive briefly while Windows finishes its asynchronous handoff, preventing transition bursts.
 
-Choose **Record** beside Read Fixed Box, Select a Snippet, or the optional Read Again shortcut, then press any supported Windows combination such as `Ctrl+Shift+T`, `Alt+Q`, `Shift+F8`, or `Ctrl+Shift+Space`. Shortcuts can be cleared individually. Windows registration detects conflicts with this app and other programs before a setting is saved; `F12` is rejected because Windows reserves it.
+Choose **Record** beside Read Fixed Box, Select a Snippet, Read Again, or Toggle Auto-Read, then press any supported Windows combination such as `Ctrl+Shift+T`, `Alt+Q`, `Shift+F8`, or `Ctrl+Shift+Space`. The Auto-Read shortcut starts unassigned. Shortcuts can be cleared individually. Windows registration detects conflicts with this app and other programs before a setting is saved; `F12` is rejected because Windows reserves it.
 
 Click **Apply shortcuts** after recording or clearing a shortcut. The form marks unapplied changes, while the header continues showing the active combination. Apply unregisters the old set, registers the complete new set, and only then saves; failures restore the previous working set where possible and report the actual registration status. If a custom snippet key still fails, check the header build and executable location in **About**, exit older running copies, and enable OCR debug logging to record registration, key dispatch, and snippet-overlay launch events.
 
@@ -156,7 +165,7 @@ The tracked version in `app_version.py` is shared by the header and executable m
 python -m unittest discover -v
 ```
 
-The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, themed scrollbars, pronunciation previews, Windows startup registration, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
+The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, themed scrollbars, pronunciation previews, Windows startup registration, Auto-Read deduplication and stale-job rejection, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
 
 ## App icon assets
 

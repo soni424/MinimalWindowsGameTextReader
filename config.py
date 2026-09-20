@@ -72,6 +72,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fixed": "Alt+Z",
         "snippet": "Alt+S",
         "read_again": "",
+        "auto_read": "",
     },
     "ocr": {
         "recognition_mode": "standard",
@@ -359,6 +360,7 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
             "fixed": _hotkey_string(raw_hotkeys.get("fixed"), DEFAULT_CONFIG["hotkeys"]["fixed"]),
             "snippet": _hotkey_string(raw_hotkeys.get("snippet"), DEFAULT_CONFIG["hotkeys"]["snippet"]),
             "read_again": _hotkey_string(raw_hotkeys.get("read_again"), DEFAULT_CONFIG["hotkeys"]["read_again"]),
+            "auto_read": _hotkey_string(raw_hotkeys.get("auto_read"), DEFAULT_CONFIG["hotkeys"]["auto_read"]),
         },
         "ocr": {
             "recognition_mode": recognition_mode,

@@ -206,10 +206,13 @@ class HotkeyManager:
         on_read_again: Callable[[], None] | None = None,
         on_error: Callable[[str], None] | None = None,
         on_event: Callable[[str], None] | None = None,
+        on_auto_read: Callable[[], None] | None = None,
     ) -> None:
         self._callbacks = (on_fixed, on_snippet, on_read_again or (lambda: None))
+        if on_auto_read is not None:
+            self._callbacks += (on_auto_read,)
         self._listener: _NativeHotkeyThread | None = None
-        self._bindings: tuple[_ParsedHotkey | None, ...] = (None, None, None)
+        self._bindings: tuple[_ParsedHotkey | None, ...] = (None,) * len(self._callbacks)
         self._lock = threading.RLock()
         self.is_running = False
         self._on_error = on_error
@@ -217,7 +220,7 @@ class HotkeyManager:
 
     @property
     def active_keys(self) -> tuple[str, ...]:
-        return tuple(item.display if item else '' for item in self._bindings) if self.is_running else ('', '', '')
+        return tuple(item.display if item else '' for item in self._bindings) if self.is_running else ('',) * len(self._callbacks)
 
     def _start(self, parsed_bindings: tuple[_ParsedHotkey | None, ...]) -> None:
         active = {
@@ -247,22 +250,24 @@ class HotkeyManager:
 
     def apply(self, fixed: str, snippet: str) -> tuple[str, str]:
         """Validate and register zero, one, or two shortcuts; empty means disabled."""
-        fixed_key, snippet_key, _read_again_key = self._apply_values(fixed, snippet, "")
+        fixed_key, snippet_key, *_remaining = self._apply_values(fixed, snippet, "")
         return fixed_key, snippet_key
 
-    def apply_all(self, fixed: str, snippet: str, read_again: str) -> tuple[str, str, str]:
+    def apply_all(self, fixed: str, snippet: str, read_again: str, auto_read: str = "") -> tuple[str, ...]:
         """Validate and register all supported shortcuts as one atomic set."""
-        return self._apply_values(fixed, snippet, read_again)
+        return self._apply_values(fixed, snippet, read_again, auto_read)
 
-    def _apply_values(self, fixed: str, snippet: str, read_again: str) -> tuple[str, str, str]:
+    def _apply_values(self, fixed: str, snippet: str, read_again: str, auto_read: str = "") -> tuple[str, ...]:
         parsed = (
             _parse_hotkey(fixed, allow_empty=True),
             _parse_hotkey(snippet, allow_empty=True),
             _parse_hotkey(read_again, allow_empty=True),
         )
+        if len(self._callbacks) == 4:
+            parsed += (_parse_hotkey(auto_read, allow_empty=True),)
         active = [item.display for item in parsed if item is not None]
         if len(set(active)) != len(active):
-            raise HotkeyError("Read Fixed Box, Select a Snippet, and Read Again must use different shortcuts.")
+            raise HotkeyError("Read Fixed Box, Select a Snippet, Read Again, and Auto-Read must use different shortcuts.")
         requested = parsed
         with self._lock:
             previous = self._bindings

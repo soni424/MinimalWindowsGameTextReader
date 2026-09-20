@@ -15,6 +15,7 @@ from typing import Callable
 
 from PIL import ImageGrab
 
+from auto_read import AutoReadWatcher
 from app_resources import apply_window_icon
 from appearance import flush_windows_compositor, resolve_theme
 from capture_pipeline import CaptureJob, CaptureWorker, PipelineTimings
@@ -117,10 +118,17 @@ class GameTextReaderApplication:
             on_start=self.ocr.warm_up,
             on_close=self.ocr.close,
         )
+        self._capture_submit_lock = threading.Lock()
+        self._manual_capture_pending = False
+        self.auto_read = AutoReadWatcher(
+            self._grab_screen, self._submit_auto_image, self._auto_read_state,
+            area_valid=self._auto_area_valid,
+        )
         self.hotkeys = HotkeyManager(
             on_fixed=self._fixed_hotkey_received,
             on_snippet=lambda: self._schedule(self.open_quick_snippet),
             on_read_again=lambda: self._schedule(self.read_again),
+            on_auto_read=lambda: self._schedule(self.toggle_auto_read),
             on_error=lambda message: self._schedule(lambda: self.ui.set_status(message, error=True)),
             on_event=self._hotkey_debug,
         )
@@ -130,6 +138,8 @@ class GameTextReaderApplication:
             self.tts,
             on_draw_box=self.open_box_editor,
             on_read_box=lambda: self.read_fixed_box(hide_settings=True),
+            on_toggle_auto_read=self.toggle_auto_read,
+            on_stop_speech=self.stop_speech,
             on_quick_snippet=lambda: self.open_quick_snippet(restore_settings_after=True),
             on_apply_hotkeys=self.apply_hotkeys,
             on_ocr_settings_changed=self.preload_correction_engine,
@@ -154,6 +164,7 @@ class GameTextReaderApplication:
             on_quit=lambda: self._schedule(self.quit_app),
             on_hide=lambda: self._schedule(self.hide_window),
             on_read_again=lambda: self._schedule(self.read_again),
+            on_toggle_auto_read=lambda: self._schedule(self.toggle_auto_read),
         )
         self.root.protocol("WM_DELETE_WINDOW", self.minimize_window)
         self._apply_initial_hotkeys()
@@ -295,28 +306,31 @@ class GameTextReaderApplication:
                 settings["hotkeys"]["fixed"],
                 settings["hotkeys"]["snippet"],
                 settings["hotkeys"].get("read_again", ""),
+                settings["hotkeys"].get("auto_read", ""),
             )
         except Exception as exc:
             self.ui.set_hotkey_status(False)
             self.ui.set_status(f"Hotkeys are inactive: {exc}", error=True)
 
-    def apply_hotkeys(self, fixed: str, snippet: str, read_again: str = "") -> None:
+    def apply_hotkeys(self, fixed: str, snippet: str, read_again: str = "", auto_read: str = "") -> None:
         """Register the requested global keys and persist them only after success."""
         previous = self.config.get()['hotkeys']
         try:
-            fixed_key, snippet_key, again_key = self.hotkeys.apply_all(fixed, snippet, read_again)
+            registered = self.hotkeys.apply_all(fixed, snippet, read_again, auto_read)
+            # Legacy callers/tests can construct the three-action manager.
+            fixed_key, snippet_key, again_key, auto_key = (*registered, "")[:4]
             try:
-                self.config.update(hotkeys={"fixed": fixed_key, "snippet": snippet_key, "read_again": again_key})
+                self.config.update(hotkeys={"fixed": fixed_key, "snippet": snippet_key, "read_again": again_key, "auto_read": auto_key})
             except Exception:
-                self.hotkeys.apply_all(previous['fixed'], previous['snippet'], previous.get('read_again', ''))
+                self.hotkeys.apply_all(previous['fixed'], previous['snippet'], previous.get('read_again', ''), previous.get('auto_read', ''))
                 raise
         except Exception:
             keys = self.hotkeys.active_keys
             self.ui.set_hotkey_status(self.hotkeys.is_running, *keys)
             raise
-        self.ui.set_hotkeys(fixed_key, snippet_key, again_key)
-        self.ui.set_hotkey_status(bool(fixed_key or snippet_key or again_key), fixed_key, snippet_key, again_key)
-        if not fixed_key and not snippet_key and not again_key:
+        self.ui.set_hotkeys(fixed_key, snippet_key, again_key, auto_key)
+        self.ui.set_hotkey_status(bool(fixed_key or snippet_key or again_key or auto_key), fixed_key, snippet_key, again_key, auto_key)
+        if not fixed_key and not snippet_key and not again_key and not auto_key:
             self.ui.set_status("Global shortcuts are disabled. You can still use the buttons and tray menu.")
 
     def _hotkey_debug(self, message: str) -> None:
@@ -343,7 +357,7 @@ class GameTextReaderApplication:
             return
         settings = self.config.get()["hotkeys"]
         try:
-            self.hotkeys.apply_all(settings["fixed"], settings["snippet"], settings.get("read_again", ""))
+            self.hotkeys.apply_all(settings["fixed"], settings["snippet"], settings.get("read_again", ""), settings.get("auto_read", ""))
         except Exception as exc:
             self.ui.set_hotkey_status(False)
             self.ui.set_status(f"Shortcuts could not resume after recording: {exc}", error=True)
@@ -384,18 +398,22 @@ class GameTextReaderApplication:
             self.ui.set_status(status)
 
     def create_capture_profile(self, name: str) -> None:
+        self.auto_read.stop("Auto-Read stopped because the capture profile changed.")
         profile = self.profiles.create(name)
         self._refresh_profiles_ui(f'Profile "{profile["name"]}" created. Set its capture area next.')
 
     def rename_capture_profile(self, profile_id: str, name: str) -> None:
+        self.auto_read.stop("Auto-Read stopped because the capture profile changed.")
         profile = self.profiles.rename(profile_id, name)
         self._refresh_profiles_ui(f'Profile renamed to "{profile["name"]}".')
 
     def delete_capture_profile(self, profile_id: str) -> None:
+        self.auto_read.stop("Auto-Read stopped because the capture profile changed.")
         self.profiles.delete(profile_id)
         self._refresh_profiles_ui("Capture profile deleted.")
 
     def select_capture_profile(self, profile_id: str) -> None:
+        self.auto_read.stop("Auto-Read stopped because the capture profile changed.")
         profile = self.profiles.select(profile_id)
         resolution = self.profiles.resolve_selected()
         self._refresh_profiles_ui()
@@ -408,6 +426,7 @@ class GameTextReaderApplication:
         """Hide settings while the user edits a reusable fixed subtitle box."""
         if self._overlay is not None:
             return
+        self.auto_read.stop("Auto-Read stopped while the capture area is being edited.")
         was_visible = self.root.state() not in {"withdrawn", "iconic"}
         resolution = self.profiles.resolve_selected() if hasattr(self, "profiles") else None
         existing_box = resolution.box if resolution is not None and resolution.available else self.config.get().get("fixed_box")
@@ -478,8 +497,52 @@ class GameTextReaderApplication:
             self.minimize_window()
         self.capture_box(box, "Fixed box", requested_at=requested_at)
 
+    def _auto_read_state(self, active: bool, message: str, error: bool) -> None:
+        """Marshal watcher status to Tk; its polling thread never touches widgets."""
+        def publish() -> None:
+            self.ui.set_auto_read_state(active, message)
+            self.ui.set_status(message, error=error)
+        self._schedule(publish)
+
+    def _auto_area_valid(self, box: tuple[int, int, int, int]) -> bool:
+        resolution = self.profiles.resolve_selected()
+        return resolution.available and resolution.box == list(box)
+
+    def toggle_auto_read(self) -> None:
+        """Arm the selected fixed box or stop the current foreground watch."""
+        if self.auto_read.active:
+            self.auto_read.stop()
+            return
+        resolution = self.profiles.resolve_selected()
+        if not resolution.available or not resolution.box:
+            self.ui.set_status(resolution.reason, error=True)
+            return
+        settings = self.config.get()
+        profile_id = settings.get("selected_profile_id")
+        profile = next(
+            (str(item.get("name", "Profile")) for item in settings["capture_profiles"]
+             if item.get("id") == profile_id), "Profile"
+        )
+        self.auto_read.start(resolution.box, profile)
+
+    def _submit_auto_image(
+        self, image: object, box: tuple[int, int, int, int], session: int, revision: int
+    ) -> bool:
+        """Manual captures outrank watcher scans and share the newest-job worker."""
+        with self._capture_submit_lock:
+            if self._manual_capture_pending or not self.auto_read.is_current(session, revision):
+                return False
+            if not self.capture_worker.wait_until_idle(0):
+                return False
+            self.capture_worker.submit(
+                box, "Auto-Read", self.config.get(), image=image,
+                auto_session=session, auto_revision=revision,
+            )
+            return True
+
     def stop_speech(self) -> None:
         """Interrupt current playback and clear speech waiting in the queue."""
+        self.auto_read.stop("Auto-Read stopped with audio.")
         self.tts.stop()
         if hasattr(self, "text_state"):
             self.text_state.end_speech()
@@ -616,19 +679,28 @@ class GameTextReaderApplication:
         self.ui.set_status(f"{source}: capturing and reading…")
         after_capture = (lambda: self._schedule(restore_after_grab)) if restore_after_grab else None
         try:
-            self.capture_worker.submit(
-                box,
-                source,
-                settings,
-                requested_at=requested_at,
-                on_capture_complete=after_capture,
-            )
+            with self._capture_submit_lock:
+                self._manual_capture_pending = True
+                self.auto_read.manual_started()
+                self.capture_worker.submit(
+                    box, source, settings, requested_at=requested_at,
+                    on_capture_complete=after_capture,
+                )
         except Exception as exc:
+            self._manual_capture_pending = False
             if restore_after_grab:
                 restore_after_grab()
             self.ui.set_status(f"{source} capture could not start: {exc}", error=True)
 
     def _capture_succeeded(self, job: CaptureJob, result: CorrectionResult, timings: PipelineTimings) -> None:
+        is_auto = job.auto_session is not None
+        if is_auto:
+            if not self.auto_read.accept_result(job.auto_session, job.auto_revision, result.corrected_text):
+                return
+        else:
+            self._manual_capture_pending = False
+            if hasattr(self, "auto_read"):
+                self.auto_read.remember_manual(result.corrected_text)
         settings = dict(job.settings)
         if settings.get("ocr", {}).get("debug_logging"):
             self._write_correction_debug(result, job, timings)
@@ -653,7 +725,7 @@ class GameTextReaderApplication:
         rate = int(settings.get("rate", 0))
         volume = int(settings.get("volume", 100))
         speech_settings = settings.get("speech", {})
-        capture_mode = speech_settings.get("capture_mode", "replace")
+        capture_mode = "replace" if is_auto else speech_settings.get("capture_mode", "replace")
         max_overlap = speech_settings.get("max_overlap", 2)
         if capture_mode == "replace":
             speech_status = "replacing current speech"
@@ -673,6 +745,10 @@ class GameTextReaderApplication:
             enqueue(document, voice, rate, volume)
 
     def _capture_failed(self, job: CaptureJob, exc: Exception) -> None:
+        if job.auto_session is not None:
+            self.auto_read.note_error(job.auto_session, job.auto_revision, str(exc))
+            return
+        self._manual_capture_pending = False
         message = str(exc) if isinstance(exc, OcrError) else f"{job.source} capture failed: {exc}"
         self._schedule(lambda: self.ui.set_status(message, error=True))
 
@@ -681,6 +757,7 @@ class GameTextReaderApplication:
         if self._closed:
             return
         self._closed = True
+        self.auto_read.stop(notify=False)
         if self._overlay is not None:
             self._overlay.close()
             self._overlay = None

@@ -18,6 +18,9 @@ class CaptureJob:
     settings: Mapping[str, Any]
     requested_at: float
     on_capture_complete: Callable[[], None] | None = None
+    image: Any | None = None
+    auto_session: int | None = None
+    auto_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,9 @@ class CaptureWorker:
         settings: Mapping[str, Any],
         requested_at: float | None = None,
         on_capture_complete: Callable[[], None] | None = None,
+        image: Any | None = None,
+        auto_session: int | None = None,
+        auto_revision: int | None = None,
     ) -> int:
         if len(box) != 4 or int(box[2]) <= int(box[0]) or int(box[3]) <= int(box[1]):
             raise ValueError("The selected capture region is invalid.")
@@ -103,6 +109,9 @@ class CaptureWorker:
                 copy.deepcopy(dict(settings)),
                 requested_at if requested_at is not None else time.perf_counter(),
                 on_capture_complete,
+                image,
+                auto_session,
+                auto_revision,
             )
             self._pending = job
             self._condition.notify_all()
@@ -151,7 +160,7 @@ class CaptureWorker:
         worker_started = time.perf_counter()
         try:
             try:
-                image = self._capture(list(job.box))
+                image = job.image if job.image is not None else self._capture(list(job.box))
             finally:
                 if job.on_capture_complete is not None:
                     job.on_capture_complete()

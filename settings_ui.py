@@ -427,7 +427,7 @@ class SettingsUI:
         on_draw_box: Callable[[], None],
         on_read_box: Callable[[], None],
         on_quick_snippet: Callable[[], None],
-        on_apply_hotkeys: Callable[[str, str, str], None],
+        on_apply_hotkeys: Callable[..., None],
         on_ocr_settings_changed: Callable[[], None] | None = None,
         on_shortcut_recording: Callable[[bool], None] | None = None,
         on_read_again: Callable[[], None] | None = None,
@@ -441,6 +441,8 @@ class SettingsUI:
         on_profile_rename: Callable[[str, str], None] | None = None,
         on_profile_delete: Callable[[str], None] | None = None,
         on_profile_select: Callable[[str], None] | None = None,
+        on_toggle_auto_read: Callable[[], None] | None = None,
+        on_stop_speech: Callable[[], None] | None = None,
     ) -> None:
         self.root = root
         self.config = config
@@ -462,6 +464,8 @@ class SettingsUI:
         self.on_profile_rename = on_profile_rename or (lambda _profile_id, _name: None)
         self.on_profile_delete = on_profile_delete or (lambda _profile_id: None)
         self.on_profile_select = on_profile_select or (lambda _profile_id: None)
+        self.on_toggle_auto_read = on_toggle_auto_read or (lambda: None)
+        self.on_stop_speech = on_stop_speech
         self._voices: dict[str, Voice] = {}
         self._voice_labels: dict[str, str] = {}
         self._label_by_id: dict[str, str] = {}
@@ -491,9 +495,10 @@ class SettingsUI:
         self.fixed_hotkey = tk.StringVar(value=settings["hotkeys"]["fixed"])
         self.snippet_hotkey = tk.StringVar(value=settings["hotkeys"]["snippet"])
         self.read_again_hotkey = tk.StringVar(value=settings["hotkeys"].get("read_again", ""))
-        self._active_hotkey_values = (self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get())
+        self.auto_read_hotkey = tk.StringVar(value=settings["hotkeys"].get("auto_read", ""))
+        self._active_hotkey_values = (self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get(), self.auto_read_hotkey.get())
         self.shortcut_edit_status = tk.StringVar(value="Recorded values match the saved shortcuts.")
-        for variable in (self.fixed_hotkey, self.snippet_hotkey, self.read_again_hotkey):
+        for variable in (self.fixed_hotkey, self.snippet_hotkey, self.read_again_hotkey, self.auto_read_hotkey):
             variable.trace_add("write", self._shortcut_edits_changed)
         self.startup_enabled = tk.BooleanVar(
             value=bool(settings.get("startup", {}).get("enabled", False))
@@ -503,6 +508,7 @@ class SettingsUI:
         self._profile_id_by_name: dict[str, str] = {}
         self._profile_name_by_id: dict[str, str] = {}
         self.box_value = tk.StringVar()
+        self.auto_read_status = tk.StringVar(value="Auto-Read is off.")
         self.capture_meta = tk.StringVar(
             value="Type or paste text here, or capture text from the screen."
         )
@@ -1035,6 +1041,8 @@ class SettingsUI:
         box_actions.grid(row=0, column=1, sticky="e", padx=(12, 0))
         ttk.Button(box_actions, text="Set capture area", command=self.on_draw_box).pack(side="left")
         ttk.Button(box_actions, text="Read now", style="Primary.TButton", command=self._read_now).pack(side="left", padx=(7, 0))
+        self.auto_read_button = ttk.Button(box_actions, text="Start Auto-Read", command=self.on_toggle_auto_read)
+        self.auto_read_button.pack(side="left", padx=(7, 0))
 
         profile_row = ttk.Frame(box_card, style="CardInner.TFrame")
         profile_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -1063,6 +1071,9 @@ class SettingsUI:
                   style="CardHint.TLabel").pack(side="left", padx=(12, 0))
         ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
         ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.", style="CardHint.TLabel").grid(row=4, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        ttk.Label(box_card, textvariable=self.auto_read_status, style="CardHint.TLabel", wraplength=680).grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=(3, 0)
+        )
 
         captured = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         captured.grid(row=1, column=0, sticky="nsew")
@@ -1301,35 +1312,41 @@ class SettingsUI:
         again_actions.grid(row=4, column=2, sticky="e")
         ttk.Button(again_actions, text="Record", style="Compact.TButton", command=lambda: self.record_shortcut(self.read_again_hotkey, "Read Again")).pack(side="left")
         ttk.Button(again_actions, text="Clear", style="Compact.TButton", command=lambda: self.read_again_hotkey.set("")).pack(side="left", padx=(5, 0))
+        ttk.Label(keys, text="Toggle Auto-Read", style="CardText.TLabel").grid(row=5, column=0, sticky="w", pady=4)
+        ttk.Entry(keys, textvariable=self.auto_read_hotkey, width=22, state="readonly").grid(row=5, column=1, sticky="ew", padx=(12, 8), pady=4)
+        auto_actions = ttk.Frame(keys, style="CardInner.TFrame")
+        auto_actions.grid(row=5, column=2, sticky="e")
+        ttk.Button(auto_actions, text="Record", style="Compact.TButton", command=lambda: self.record_shortcut(self.auto_read_hotkey, "Toggle Auto-Read")).pack(side="left")
+        ttk.Button(auto_actions, text="Clear", style="Compact.TButton", command=lambda: self.auto_read_hotkey.set("")).pack(side="left", padx=(5, 0))
         self.apply_shortcuts_button = ttk.Button(keys, text="Apply shortcuts", style="Primary.TButton", command=self.apply_hotkeys)
-        self.apply_shortcuts_button.grid(row=5, column=1, columnspan=2, sticky="e", pady=(10, 0))
+        self.apply_shortcuts_button.grid(row=6, column=1, columnspan=2, sticky="e", pady=(10, 0))
         ttk.Label(keys, textvariable=self.shortcut_edit_status, style="CardHint.TLabel",
-                  wraplength=220).grid(row=5, column=0, sticky="w", pady=(10, 0))
+                  wraplength=220).grid(row=6, column=0, sticky="w", pady=(10, 0))
 
         ttk.Separator(keys).grid(
-            row=6, column=0, columnspan=3, sticky="ew", pady=(18, 12)
+            row=7, column=0, columnspan=3, sticky="ew", pady=(18, 12)
         )
         ttk.Label(keys, text="Windows startup", style="CardTitle.TLabel").grid(
-            row=7, column=0, columnspan=3, sticky="w"
+            row=8, column=0, columnspan=3, sticky="w"
         )
         ttk.Checkbutton(
             keys,
             text="Launch when I sign in to Windows",
             variable=self.startup_enabled,
             command=self._startup_changed,
-        ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 2))
+        ).grid(row=9, column=0, columnspan=3, sticky="w", pady=(8, 2))
         ttk.Label(
             keys,
             text="Starts quietly in the system tray with global shortcuts ready.",
             style="CardHint.TLabel",
             wraplength=520,
             justify="left",
-        ).grid(row=9, column=0, columnspan=3, sticky="w")
+        ).grid(row=10, column=0, columnspan=3, sticky="w")
         ttk.Separator(keys).grid(
-            row=10, column=0, columnspan=3, sticky="ew", pady=(18, 12)
+            row=11, column=0, columnspan=3, sticky="ew", pady=(18, 12)
         )
         ttk.Label(keys, text="Settings and updates", style="CardTitle.TLabel").grid(
-            row=11, column=0, columnspan=3, sticky="w"
+            row=12, column=0, columnspan=3, sticky="w"
         )
         ttk.Label(
             keys,
@@ -1337,12 +1354,12 @@ class SettingsUI:
             style="CardHint.TLabel",
             wraplength=520,
             justify="left",
-        ).grid(row=12, column=0, columnspan=3, sticky="w", pady=(2, 8))
+        ).grid(row=13, column=0, columnspan=3, sticky="w", pady=(2, 8))
         ttk.Button(
             keys,
             text="Import settings from older app folder…",
             command=self.import_older_settings,
-        ).grid(row=13, column=0, columnspan=3, sticky="w")
+        ).grid(row=14, column=0, columnspan=3, sticky="w")
         parent.bind("<Configure>", self._settings_tab_resized, add="+")
         self.root.after_idle(lambda: self._layout_settings_cards(parent.winfo_width()))
 
@@ -1713,12 +1730,15 @@ class SettingsUI:
 
     def stop_speech(self) -> None:
         """Interrupt current speech and discard anything waiting behind it."""
+        if self.on_stop_speech is not None:
+            self.on_stop_speech()
+            return
         self.tts.stop()
         self.clear_speech_progress()
         self.set_status("Speech stopped and the queue was cleared.")
 
     def _shortcut_edits_changed(self, *_args: object) -> None:
-        values = (self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get())
+        values = (self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get(), self.auto_read_hotkey.get())
         self.shortcut_edit_status.set(
             "Unapplied changes — click Apply shortcuts." if values != self._active_hotkey_values
             else "These values are applied."
@@ -1728,7 +1748,7 @@ class SettingsUI:
         """Register both shortcuts after saving the current voice settings."""
         self._save_voice_settings()
         try:
-            self.on_apply_hotkeys(self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get())
+            self.on_apply_hotkeys(self.fixed_hotkey.get(), self.snippet_hotkey.get(), self.read_again_hotkey.get(), self.auto_read_hotkey.get())
         except Exception as exc:
             self.set_status(str(exc), error=True)
             _ThemedAlertDialog(self.root, self._palette, "Could not apply shortcuts", str(exc)).show()
@@ -1797,11 +1817,18 @@ class SettingsUI:
             target.set(dialog.result)
             self.set_status(f"Recorded {dialog.result}. Select Apply shortcuts to activate it.")
 
-    def set_hotkeys(self, fixed: str, snippet: str, read_again: str = "") -> None:
+    def set_hotkeys(self, fixed: str, snippet: str, read_again: str = "", auto_read: str = "") -> None:
         """Replace shortcut fields with the canonical values accepted by Windows."""
         self.fixed_hotkey.set(fixed)
         self.snippet_hotkey.set(snippet)
         self.read_again_hotkey.set(read_again)
+        self.auto_read_hotkey.set(auto_read)
+
+    def set_auto_read_state(self, active: bool, message: str = "") -> None:
+        if hasattr(self, "auto_read_button"):
+            self.auto_read_button.configure(text="Stop Auto-Read" if active else "Start Auto-Read")
+        if hasattr(self, "auto_read_status"):
+            self.auto_read_status.set(message or ("Auto-Read is on." if active else "Auto-Read is off."))
 
     def set_profiles(
         self,
@@ -2173,12 +2200,12 @@ class SettingsUI:
         if hasattr(self, "status_label"):
             self.status_label.configure(style="StatusError.TLabel" if error else "Status.TLabel")
 
-    def set_hotkey_status(self, active: bool, fixed: str = "", snippet: str = "", read_again: str = "") -> None:
+    def set_hotkey_status(self, active: bool, fixed: str = "", snippet: str = "", read_again: str = "", auto_read: str = "") -> None:
         """Update the shortcut health badge after registration changes."""
-        self._active_hotkey_values = (fixed, snippet, read_again) if active else ("", "", "")
+        self._active_hotkey_values = (fixed, snippet, read_again, auto_read) if active else ("", "", "", "")
         self._shortcut_edits_changed()
         if active:
-            labels = "  /  ".join(item for item in (fixed, snippet, read_again) if item)
+            labels = "  /  ".join(item for item in (fixed, snippet, read_again, auto_read) if item)
             self.hotkey_status.set(f"Shortcuts ready  •  {labels}")
             if hasattr(self, "hotkey_badge"):
                 self.hotkey_badge.configure(style="HotkeysOn.TLabel")
