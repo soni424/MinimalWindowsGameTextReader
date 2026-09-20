@@ -327,6 +327,133 @@ class WindowPlacementTests(unittest.TestCase):
 
 
 class CaptureWorkerTests(unittest.TestCase):
+    def test_new_capture_stops_old_optional_ocr_passes(self) -> None:
+        from PIL import Image, ImageDraw
+        from ocr_engine import OcrEngine
+
+        started = threading.Event()
+        release = threading.Event()
+
+        class Session:
+            calls: list[tuple[int, int]] = []
+
+            def recognise(self, image: Image.Image) -> dict[str, str]:
+                self.calls.append(image.size)
+                if len(self.calls) == 1:
+                    started.set()
+                    release.wait(2)
+                    return {"text": "A n g e l"}
+                return {"text": "New dialogue is ready."}
+
+            def close(self) -> None:
+                pass
+
+        session = Session()
+        engine = OcrEngine(session_factory=lambda _language: session)
+        published: list[str] = []
+        def capture(box: list[int]) -> Image.Image:
+            image = Image.new("RGB", (220, 48), "gray")
+            if box[0] == 1:
+                ImageDraw.Draw(image).rectangle((5, 5, 200, 40), fill="black")
+            return image
+        worker = CaptureWorker(
+            capture=capture,
+            recognise=lambda image, settings, is_current: engine.recognise_with_details(
+                image, settings["ocr"]["recognition_mode"], is_current=is_current),
+            correct=lambda raw, _settings: raw,
+            on_result=lambda _job, result, _timings: published.append(result),
+            on_error=lambda _job, error: self.fail(f"Unexpected worker error: {error}"),
+            on_close=engine.close,
+        )
+        try:
+            mode = {"ocr": {"recognition_mode": "enhanced"}}
+            worker.submit([0, 0, 220, 48], "old", mode)
+            self.assertTrue(started.wait(2))
+            worker.submit([1, 0, 221, 48], "new", mode)
+            release.set()
+            self.assertTrue(worker.wait_until_idle(5))
+        finally:
+            release.set()
+            worker.close()
+
+        self.assertEqual(session.calls, [(220, 48), (220, 48)])
+        self.assertEqual(published, ["New dialogue is ready."])
+
+    def test_capture_uses_its_saved_extraction_mode_and_corrects_selected_raw_text(self) -> None:
+        from ocr_engine import RecognitionResult
+
+        release_capture = threading.Event()
+        published: list[tuple[str, str, str]] = []
+
+        def capture(_box: list[int]) -> str:
+            release_capture.wait(2)
+            return "image"
+
+        worker = CaptureWorker(
+            capture=capture,
+            recognise=lambda _image, settings, _is_current: RecognitionResult(
+                "Noytibos" if settings["ocr"]["recognition_mode"] == "enhanced" else "Naytibas",
+                "enlarged_color", 2,
+            ),
+            correct=lambda raw, _settings: raw.replace("Noytibos", "Naytibas"),
+            on_result=lambda job, result, timings: published.append(
+                (job.settings["ocr"]["recognition_mode"], result, timings.ocr_variant)
+            ),
+            on_error=lambda _job, error: self.fail(f"Unexpected worker error: {error}"),
+        )
+        try:
+            settings = {"ocr": {"recognition_mode": "enhanced"}}
+            worker.submit([0, 0, 100, 100], "Quick snippet", settings)
+            settings["ocr"]["recognition_mode"] = "standard"
+            release_capture.set()
+            self.assertTrue(worker.wait_until_idle(2))
+        finally:
+            release_capture.set()
+            worker.close()
+
+        self.assertEqual(published, [("enhanced", "Naytibas", "enlarged_color")])
+
+    def test_fixed_box_and_snippet_share_enhanced_ocr_and_custom_corrections(self) -> None:
+        from PIL import Image, ImageDraw
+        from ocr_engine import OcrEngine
+        from ocr_correction import OcrCorrector, CorrectionOptions
+
+        class Session:
+            def recognise(self, image: Image.Image) -> dict[str, str]:
+                return {"text": "Noytibos" if image.width > 220 else "N o y t i b o s"}
+
+            def close(self) -> None:
+                pass
+
+        image = Image.new("RGB", (220, 48), (45, 45, 60))
+        ImageDraw.Draw(image).text((5, 8), "Noytibos", fill=(120, 120, 130))
+        engine = OcrEngine(session_factory=lambda _language: Session())
+        corrector = OcrCorrector()
+        published: list[tuple[str, str, str]] = []
+        settings = {"ocr": {"recognition_mode": "enhanced", "enabled": False,
+                            "replacements": [{"original": "Noytibos", "replacement": "Naytibas"}]}}
+        worker = CaptureWorker(
+            capture=lambda _box: image,
+            recognise=lambda picture, snapshot, is_current: engine.recognise_with_details(
+                picture, snapshot["ocr"]["recognition_mode"], is_current=is_current),
+            correct=lambda raw, snapshot: corrector.correct(raw, CorrectionOptions.from_mapping(snapshot["ocr"])),
+            on_result=lambda job, result, _timings: published.append(
+                (job.source, result.raw_text, result.corrected_text)),
+            on_error=lambda _job, error: self.fail(f"Unexpected worker error: {error}"),
+            on_close=engine.close,
+        )
+        try:
+            for source in ("Fixed box", "Quick snippet"):
+                worker.submit([0, 0, 220, 48], source, settings)
+                self.assertTrue(worker.wait_until_idle(5))
+        finally:
+            worker.close()
+
+        self.assertEqual(published, [
+            ("Fixed box", "Noytibos", "Naytibas"),
+            ("Quick snippet", "Noytibos", "Naytibas"),
+        ])
+
     def test_rapid_requests_run_one_ocr_at_a_time_and_only_publish_the_newest(self) -> None:
         first_started = threading.Event()
         release_first = threading.Event()
@@ -336,7 +463,7 @@ class CaptureWorkerTests(unittest.TestCase):
         maximum_active = 0
         guard = threading.Lock()
 
-        def recognise(image: str) -> str:
+        def recognise(image: str, _settings: object, _is_current: object) -> str:
             nonlocal active, maximum_active
             with guard:
                 active += 1

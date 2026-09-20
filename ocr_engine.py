@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from statistics import median
 from typing import Callable, Final, Protocol
 
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 
 
 class OcrError(RuntimeError):
     """Raised when the Windows Media OCR API cannot process an image."""
+
+
+@dataclass(frozen=True)
+class RecognitionResult:
+    text: str
+    variant: str = "original"
+    attempts: int = 1
+    elapsed_ms: float = 0.0
 
 
 class _OcrSession(Protocol):
@@ -38,6 +48,7 @@ class _WinOcrSession:
         self._module = winocr
         self._engine = engine
         self._loop = asyncio.new_event_loop()
+        self.max_image_dimension = int(getattr(winocr.OcrEngine, "max_image_dimension", 4096))
 
     def recognise(self, image: Image.Image) -> object:
         module = self._module
@@ -78,6 +89,8 @@ class OcrEngine:
     """Recognise text from Pillow images through Windows' Media OCR API."""
 
     DEFAULT_LANGUAGE: Final[str] = "en"
+    _MAX_PREPARED_PIXELS: Final[int] = 8_000_000
+    _WORD: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)*")
 
     def __init__(
         self,
@@ -219,11 +232,8 @@ class OcrEngine:
     def _result_text(cls, result: object) -> str:
         """Extract readable text from the result returned by ``winocr``.
 
-        Recent ``winocr`` releases return a mapping containing the complete
-        OCR layout (lines, words, and bounding rectangles), rather than a
-        plain string.  Passing that mapping through ``str`` made the speech
-        engine read its Python representation aloud.  Prefer the full-text
-        value and fall back to the recognised lines when it is unavailable.
+        Structured lines preserve paragraph spacing when their word geometry
+        is available. Use the flat text only when no usable lines exist.
         """
         if isinstance(result, str):
             return result
@@ -245,21 +255,116 @@ class OcrEngine:
 
         return text if isinstance(text, str) else ""
 
-    def recognise(self, image: Image.Image) -> str:
-        """Return Windows OCR text for a Pillow image.
+    @classmethod
+    def _text_evidence(cls, text: str) -> float:
+        """Conservative readability evidence, not native OCR confidence."""
+        words = cls._WORD.findall(text)
+        if not words:
+            return 0.0
+        fragments = sum(len(word) == 1 and word.casefold() not in {"a", "i"} for word in words)
+        broken = len(re.findall(r"[A-Za-z][0-9|~{}][A-Za-z]|[0-9|~{}][A-Za-z]{2}", text))
+        artifacts = sum(char in "|~{}�" for char in text)
+        return max(0.0, 1.0 - 0.60 * fragments / len(words)
+                   - 0.35 * broken / len(words) - 0.20 * artifacts / len(words))
 
-        ``recognize_pil_sync`` is supplied by ``winocr`` and directly wraps the
-        Windows Media OCR API.  It avoids third-party OCR models and their font
-        interpretation differences.
-        """
+    @staticmethod
+    def _contrast_spread(image: Image.Image) -> int:
+        histogram = ImageOps.grayscale(image).histogram()
+        total = image.width * image.height
+        low_target, high_target = total * 0.02, total * 0.98
+        count = 0
+        low, high = 0, 255
+        for value, frequency in enumerate(histogram):
+            count += frequency
+            if count >= low_target:
+                low = value
+                break
+        count = 0
+        for value, frequency in enumerate(histogram):
+            count += frequency
+            if count >= high_target:
+                high = value
+                break
+        return high - low
+
+    @classmethod
+    def _should_retry(cls, image: Image.Image, raw_result: object, text: str) -> bool:
+        if not text:
+            channels = image.convert("RGB").getextrema()
+            return any(high - low >= 8 for low, high in channels)
+        if cls._text_evidence(text) < 0.88:
+            return True
+        lines = cls._items(cls._value(raw_result, "lines"))
+        heights = [bounds[3] for line in lines if (bounds := cls._line_details(line)[1]) is not None]
+        if heights and median(heights) < 14:
+            return True
+        return cls._contrast_spread(image) < 70
+
+    def _prepared_images(self, image: Image.Image):
+        native_limit = getattr(self._get_session(), "max_image_dimension", 4096)
+        try:
+            limit = max(1, min(4096, int(native_limit)))
+        except (TypeError, ValueError):
+            limit = 4096
+        factor = min(2.0, limit / max(image.size),
+                     (self._MAX_PREPARED_PIXELS / (image.width * image.height)) ** 0.5)
+        size = (max(1, int(image.width * factor)), max(1, int(image.height * factor)))
+        color = image.convert("RGB")
+        if size != image.size:
+            color = color.resize(size, Image.Resampling.BICUBIC)
+        yield "enlarged_color", color.filter(ImageFilter.UnsharpMask(radius=1.0, percent=110, threshold=2))
+        gray = ImageOps.autocontrast(ImageOps.grayscale(image), cutoff=1)
+        if size != image.size:
+            gray = gray.resize(size, Image.Resampling.BICUBIC)
+        yield "contrast_gray", gray.filter(ImageFilter.UnsharpMask(radius=1.0, percent=90, threshold=2))
+
+    def recognise_with_details(
+        self, image: Image.Image, mode: str = "standard", *,
+        is_current: Callable[[], bool] | None = None,
+    ) -> RecognitionResult:
+        """Return the selected raw OCR text and bounded recognition diagnostics."""
+        started = time.perf_counter()
         if not isinstance(image, Image.Image):
             raise TypeError("OCR requires a Pillow Image instance.")
         if image.width < 1 or image.height < 1:
-            return ""
+            return RecognitionResult("", elapsed_ms=(time.perf_counter() - started) * 1000.0)
         try:
             result = self._get_session().recognise(image)
         except OcrError:
             raise
         except Exception as exc:
             raise OcrError(f"Windows OCR failed: {exc}") from exc
-        return self.clean_text(self._result_text(result))
+        text = self.clean_text(self._result_text(result))
+        best_text, best_variant, best_evidence = text, "original", self._text_evidence(text)
+        attempts = 1
+        if mode == "enhanced" and (is_current is None or is_current()) and self._should_retry(image, result, text):
+            try:
+                variants = list(self._prepared_images(image))
+            except Exception:
+                variants = []
+            for variant, prepared in variants:
+                if is_current is not None and not is_current():
+                    break
+                try:
+                    candidate = self.clean_text(self._result_text(self._get_session().recognise(prepared)))
+                    attempts += 1
+                except Exception:
+                    # A failed optional pass cannot erase a successful baseline.
+                    continue
+                evidence = self._text_evidence(candidate)
+                words = self._WORD.findall(candidate)
+                alpha_count = sum(char.isalpha() for char in candidate)
+                baseline_alpha = sum(char.isalpha() for char in text)
+                empty_baseline_evidence = (sum(len(word) >= 3 for word in words) >= 2
+                                           and alpha_count >= 8 and evidence >= 0.88)
+                if (candidate and "�" not in candidate
+                        and alpha_count >= baseline_alpha * 0.8
+                        and evidence >= 0.65
+                        and (empty_baseline_evidence if not text else evidence > best_evidence + 0.12)):
+                    best_text, best_variant, best_evidence = candidate, variant, evidence
+        return RecognitionResult(best_text, best_variant, attempts,
+                                 (time.perf_counter() - started) * 1000.0)
+
+    def recognise(self, image: Image.Image) -> str:
+        """Return unchanged Standard-mode Windows OCR text for a Pillow image."""
+        return self.recognise_with_details(image).text

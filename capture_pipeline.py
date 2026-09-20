@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
+from ocr_engine import RecognitionResult
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,8 @@ class PipelineTimings:
     capture_finished_at: float
     ocr_finished_at: float
     correction_finished_at: float
+    ocr_variant: str = "original"
+    ocr_attempts: int = 1
 
     @property
     def dispatch_ms(self) -> float:
@@ -56,7 +59,7 @@ class CaptureWorker:
     def __init__(
         self,
         capture: Callable[[list[int]], Any],
-        recognise: Callable[[Any], str],
+        recognise: Callable[[Any, Mapping[str, Any], Callable[[], bool]], str | RecognitionResult],
         correct: Callable[[str, Mapping[str, Any]], Any],
         on_result: Callable[[CaptureJob, Any, PipelineTimings], None],
         on_error: Callable[[CaptureJob, Exception], None],
@@ -155,7 +158,8 @@ class CaptureWorker:
             capture_finished = time.perf_counter()
             if not self._is_latest(job.identifier):
                 return
-            raw_text = self._recognise(image)
+            recognition = self._recognise(image, job.settings, lambda: self._is_latest(job.identifier))
+            raw_text = recognition.text if isinstance(recognition, RecognitionResult) else recognition
             ocr_finished = time.perf_counter()
             if not self._is_latest(job.identifier):
                 return
@@ -169,6 +173,8 @@ class CaptureWorker:
                 capture_finished,
                 ocr_finished,
                 correction_finished,
+                recognition.variant if isinstance(recognition, RecognitionResult) else "original",
+                recognition.attempts if isinstance(recognition, RecognitionResult) else 1,
             )
             # Linearize publication with ``submit``. Either this result wins
             # before the new request is accepted, or the generation check drops

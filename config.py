@@ -74,6 +74,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "read_again": "",
     },
     "ocr": {
+        "recognition_mode": "standard",
         "enabled": True,
         "strength": "conservative",
         "debug_logging": False,
@@ -321,6 +322,10 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     strength = strength.strip().lower() if isinstance(strength, str) else DEFAULT_CONFIG["ocr"]["strength"]
     if strength not in {"conservative", "balanced", "strong"}:
         strength = DEFAULT_CONFIG["ocr"]["strength"]
+    recognition_mode = raw_ocr.get("recognition_mode", DEFAULT_CONFIG["ocr"]["recognition_mode"])
+    recognition_mode = recognition_mode.strip().lower() if isinstance(recognition_mode, str) else "standard"
+    if recognition_mode not in {"standard", "enhanced"}:
+        recognition_mode = "standard"
     legacy_box = _normalise_box(raw.get("fixed_box"))
     profiles = _normalise_profiles(raw.get("capture_profiles"), legacy_box)
     selected_profile_id = raw.get("selected_profile_id")
@@ -356,6 +361,7 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
             "read_again": _hotkey_string(raw_hotkeys.get("read_again"), DEFAULT_CONFIG["hotkeys"]["read_again"]),
         },
         "ocr": {
+            "recognition_mode": recognition_mode,
             "enabled": _normalise_bool(raw_ocr.get("enabled"), DEFAULT_CONFIG["ocr"]["enabled"]),
             "strength": strength,
             "debug_logging": _normalise_bool(raw_ocr.get("debug_logging"), DEFAULT_CONFIG["ocr"]["debug_logging"]),

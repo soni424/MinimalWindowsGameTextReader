@@ -1,6 +1,16 @@
-# Game Text Reader 1.2.0-dev
+# Game Text Reader 1.2.1-dev
 
 Development build for testing before a stable release.
+
+## Switchable text extraction
+
+- Added **Standard / Enhanced** in the Reader tab. The choice persists and applies to both fixed-box and snippet captures; older settings default to Standard.
+- Enhanced keeps the existing OCR result as its baseline and tries up to two size-bounded image preparations only for weak-looking results. It keeps the baseline when an alternative is uncertain.
+- Recognized text continues through the same custom replacements, contextual corrections, display, and speech path. The optional debug log records the selected variant, pass count, and OCR time.
+- New captures can skip obsolete optional passes, retaining responsive rapid reading. No PowerToys dependency or clipboard integration is added.
+- Results will vary by game font, display, and Windows OCR language pack. This is not PowerToys' exact capture implementation.
+
+## Previous development build: 1.2.0-dev
 
 ## Reader navigation
 

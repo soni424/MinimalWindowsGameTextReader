@@ -510,6 +510,7 @@ class SettingsUI:
         self.status_value = tk.StringVar(value="Starting…")
         self.hotkey_status = tk.StringVar(value="Shortcuts starting")
         ocr_settings = settings["ocr"]
+        self.recognition_mode = tk.StringVar(value=ocr_settings.get("recognition_mode", "standard").title())
         self.ocr_enabled = tk.BooleanVar(value=ocr_settings["enabled"])
         self.ocr_strength = tk.StringVar(value=ocr_settings["strength"].title())
         self.ocr_debug = tk.BooleanVar(value=ocr_settings["debug_logging"])
@@ -1049,8 +1050,19 @@ class SettingsUI:
         ttk.Button(profile_actions, text="New", style="Compact.TButton", command=self.create_profile).pack(side="left")
         ttk.Button(profile_actions, text="Rename", style="Compact.TButton", command=self.rename_profile).pack(side="left", padx=(5, 0))
         ttk.Button(profile_actions, text="Delete", style="Compact.TButton", command=self.delete_profile).pack(side="left", padx=(5, 0))
-        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.", style="CardHint.TLabel").grid(row=3, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        extraction_row = ttk.Frame(box_card, style="CardInner.TFrame")
+        extraction_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(9, 0))
+        ttk.Label(extraction_row, text="Text extraction", style="CardText.TLabel").pack(side="left", padx=(0, 8))
+        self.recognition_mode_combo = self._register_combobox(
+            ttk.Combobox(extraction_row, textvariable=self.recognition_mode,
+                         values=("Standard", "Enhanced"), state="readonly", width=14)
+        )
+        self.recognition_mode_combo.pack(side="left")
+        self.recognition_mode_combo.bind("<<ComboboxSelected>>", self._recognition_mode_changed)
+        ttk.Label(extraction_row, text="Enhanced adapts difficult images and may take longer.",
+                  style="CardHint.TLabel").pack(side="left", padx=(12, 0))
+        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.", style="CardHint.TLabel").grid(row=4, column=0, columnspan=2, sticky="w", pady=(3, 0))
 
         captured = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         captured.grid(row=1, column=0, sticky="nsew")
@@ -1415,6 +1427,7 @@ class SettingsUI:
         """Persist the visible correction controls and user dictionaries."""
         saved = self.config.update(
             ocr={
+                "recognition_mode": self.recognition_mode.get().strip().lower(),
                 "enabled": self.ocr_enabled.get(),
                 "strength": self.ocr_strength.get().strip().lower(),
                 "debug_logging": self.ocr_debug.get(),
@@ -1426,6 +1439,14 @@ class SettingsUI:
         self._protected_words = list(saved["protected_words"])
         self.on_ocr_settings_changed()
         self.set_status("OCR correction settings saved.")
+
+    def _recognition_mode_changed(self, _event: object | None = None) -> None:
+        mode = self.recognition_mode.get().strip().lower()
+        if mode not in {"standard", "enhanced"}:
+            mode = "standard"
+        saved = self.config.update(ocr={"recognition_mode": mode})["ocr"]
+        self.recognition_mode.set(saved["recognition_mode"].title())
+        self.set_status(f"Text extraction set to {self.recognition_mode.get()} for the next capture.")
 
     def _selected_replacement_index(self) -> int | None:
         selected = self.replacement_tree.selection()

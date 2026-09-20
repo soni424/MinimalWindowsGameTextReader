@@ -7,7 +7,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from appearance import flush_windows_compositor
+from appearance import DARK, ThemePalette, flush_windows_compositor
 from capture_profiles import MonitorInfo, get_monitors
 
 
@@ -133,6 +133,13 @@ class _ScreenOverlay:
             return 0
 
     def _place_native_window(self, window: tk.Toplevel, monitor: MonitorInfo) -> bool:
+        return self._place_native_rect(
+            window, monitor.left, monitor.top, monitor.width, monitor.height
+        )
+
+    def _place_native_rect(
+        self, window: tk.Toplevel, left: int, top: int, width: int, height: int
+    ) -> bool:
         hwnd = self._window_handle(window)
         if not hwnd:
             return False
@@ -145,10 +152,10 @@ class _ScreenOverlay:
             result = user32.SetWindowPos(
                 hwnd,
                 self._HWND_TOP,
-                int(monitor.left),
-                int(monitor.top),
-                int(monitor.width),
-                int(monitor.height),
+                int(left),
+                int(top),
+                int(width),
+                int(height),
                 self._SWP_NOACTIVATE | self._SWP_SHOWWINDOW,
             )
             if not result:
@@ -201,7 +208,13 @@ class _ScreenOverlay:
 
     @staticmethod
     def _canvas_size(pane: _MonitorPane) -> tuple[int, int]:
-        return max(1, int(pane.canvas.winfo_width())), max(1, int(pane.canvas.winfo_height()))
+        # Tk reports 1x1 until the first Configure event. Drawing against that
+        # placeholder collapses the initial selection to a nearly invisible dot.
+        width, height = int(pane.canvas.winfo_width()), int(pane.canvas.winfo_height())
+        return (
+            width if width > 1 else pane.monitor.width,
+            height if height > 1 else pane.monitor.height,
+        )
 
     def screen_to_canvas(self, x: int, y: int, pane: _MonitorPane | None = None) -> tuple[float, float]:
         pane = pane or self.pane_for_screen(x, y) or self._panes[0]
@@ -250,7 +263,6 @@ class _ScreenOverlay:
 class BoxEditorOverlay(_ScreenOverlay):
     """Move, resize, save, or cancel a persistent fixed OCR bounding box."""
 
-    HANDLE_SIZE = 12
     MIN_SIZE = 20
 
     def __init__(
@@ -260,19 +272,25 @@ class BoxEditorOverlay(_ScreenOverlay):
         on_confirm: Callable[[list[int]], None],
         on_cancel: Callable[[], None],
         monitor_provider: Callable[[], Iterable[MonitorInfo]] | None = None,
+        palette: ThemePalette | None = None,
     ) -> None:
+        cursor_at_open = self._cursor_position()
         super().__init__(master, alpha=0.38, monitor_provider=monitor_provider)
+        self._palette = palette or DARK
         self._on_confirm = on_confirm
         self._on_cancel = on_cancel
         self._finished = False
         self._active_handle = ""
-        self._active_pane = self.primary_pane()
+        self._active_pane = (
+            self.pane_for_screen(*cursor_at_open) if cursor_at_open else None
+        ) or self.primary_pane()
         self._drag_origin = (0, 0)
         self._start_rect = (0, 0, 0, 0)
         self._old_rect = (0, 0, 0, 0)
+        self._old_pane = self._active_pane
         if existing_box and len(existing_box) == 4:
             self.rect = tuple(int(value) for value in existing_box)
-            self._active_pane = self._pane_for_rect(self.rect) or self.primary_pane()
+            self._active_pane = self._pane_for_rect(self.rect) or self._active_pane
             self.rect = self._normalise_and_clamp(self.rect, self._active_pane.monitor)
         else:
             monitor = self._active_pane.monitor
@@ -282,6 +300,7 @@ class BoxEditorOverlay(_ScreenOverlay):
             self.rect = (left, top, left + width, top + height)
         self._build_controls()
         for pane in self.panes:
+            pane.canvas.bind("<Configure>", lambda _event: self._draw())
             pane.canvas.bind(
                 "<ButtonPress-1>",
                 lambda event, current=pane: self._press(event, current),
@@ -294,10 +313,14 @@ class BoxEditorOverlay(_ScreenOverlay):
                 "<ButtonRelease-1>",
                 lambda event, current=pane: self._release(event, current),
             )
-            pane.window.bind("<Return>", lambda _event: self.confirm())
-            pane.window.bind("<Escape>", lambda _event: self.cancel())
+            pane.canvas.bind(
+                "<Motion>", lambda event, current=pane: self._update_cursor(event, current)
+            )
+            pane.window.bind("<KeyPress>", self._on_key)
+        self._toolbar.bind("<KeyPress>", self._on_key)
         self.primary_pane().window.protocol("WM_DELETE_WINDOW", self.cancel)
         self._draw()
+        self._toolbar.focus_force()
 
     @staticmethod
     def _intersection_area(rect: tuple[int, int, int, int], monitor: MonitorInfo) -> int:
@@ -308,41 +331,106 @@ class BoxEditorOverlay(_ScreenOverlay):
         return max(0, right - left) * max(0, bottom - top)
 
     def _pane_for_rect(self, rect: tuple[int, int, int, int]) -> _MonitorPane | None:
-        return max(self.panes, key=lambda pane: self._intersection_area(rect, pane.monitor), default=None)
+        pane = max(self.panes, key=lambda item: self._intersection_area(rect, item.monitor), default=None)
+        return pane if pane and self._intersection_area(rect, pane.monitor) else None
 
     def _build_controls(self) -> None:
-        pane = self.primary_pane()
-        controls = tk.Frame(pane.canvas, bg="#1e293b", padx=10, pady=7)
-        tk.Label(
-            controls,
-            text="Drag inside to move • drag handles/edges to resize • Enter saves • Esc cancels",
-            fg="#f8fafc",
-            bg="#1e293b",
-            font=("Segoe UI", 10),
-        ).pack(side="left", padx=(0, 12))
-        tk.Button(
-            controls,
-            text="Confirm / Done",
-            command=self.confirm,
-            bg="#166a34",
-            fg="white",
-            relief="flat",
-            padx=10,
-        ).pack(side="left", padx=3)
-        tk.Button(
-            controls,
-            text="Cancel",
-            command=self.cancel,
-            bg="#475569",
-            fg="white",
-            relief="flat",
-            padx=10,
-        ).pack(side="left", padx=3)
-        pane.canvas.create_window(
-            max(10, pane.canvas.winfo_width() // 2),
-            28,
-            window=controls,
-            tags="controls",
+        self._toolbar = tk.Toplevel(self.master)
+        self._toolbar.withdraw()
+        self._toolbar.overrideredirect(True)
+        self._toolbar.attributes("-topmost", True)
+        self._toolbar.configure(bg=self._palette.border)
+        self._toolbar_monitor: MonitorInfo | None = None
+        self._toolbar_bounds = (0, 0, 0, 0)
+        self._toolbar_content = tk.Frame(self._toolbar, bg=self._palette.border, padx=1, pady=1)
+        self._toolbar_content.pack(fill="both", expand=True)
+        self._dimension_label: tk.Label | None = None
+        self._place_toolbar(self._active_pane)
+
+    def _place_toolbar(self, pane: _MonitorPane) -> None:
+        monitor = pane.monitor
+        if self._toolbar_monitor != monitor:
+            for child in self._toolbar_content.winfo_children():
+                child.destroy()
+            scale = max(1.0, monitor.dpi_x / 96.0)
+            margin = max(16, round(16 * scale))
+            padding = max(12, round(14 * scale))
+            panel_width = max(1, monitor.width - 2 * margin)
+            content = tk.Frame(
+                self._toolbar_content, bg=self._palette.card, padx=padding, pady=padding
+            )
+            content.pack(fill="both", expand=True)
+            font_size = max(13, round(14 * scale))
+            title = tk.Label(
+                content, text="Set capture area", bg=self._palette.card,
+                fg=self._palette.text, font=("Segoe UI", -round(font_size * 1.15), "bold"),
+                anchor="w",
+            )
+            title.pack(fill="x")
+            self._dimension_label = tk.Label(
+                content, bg=self._palette.card, fg=self._palette.accent,
+                font=("Segoe UI", -font_size, "bold"), anchor="w",
+            )
+            self._dimension_label.pack(fill="x", pady=(max(5, round(5 * scale)), 0))
+            tk.Label(
+                content,
+                text="Drag inside to move • drag handles to resize\n"
+                     "Drag elsewhere on either screen to draw a new box",
+                bg=self._palette.card, fg=self._palette.muted,
+                font=("Segoe UI", -font_size), justify="left", anchor="w",
+                wraplength=max(80, panel_width - 2 * padding),
+            ).pack(fill="x", pady=(max(6, round(7 * scale)), 0))
+            tk.Label(
+                content, text="Enter saves • Esc cancels • Arrows move • Shift+arrows move 10 px",
+                bg=self._palette.card, fg=self._palette.muted,
+                font=("Segoe UI", -max(12, round(12 * scale))),
+                justify="left", anchor="w", wraplength=max(80, panel_width - 2 * padding),
+            ).pack(fill="x", pady=(max(5, round(6 * scale)), 0))
+            buttons = tk.Frame(content, bg=self._palette.card)
+            buttons.pack(fill="x", pady=(max(9, round(10 * scale)), 0))
+            tk.Button(
+                buttons, text="Save area", command=self.confirm,
+                bg=self._palette.accent, activebackground=self._palette.accent_hover,
+                fg="white", activeforeground="white", relief="flat",
+                font=("Segoe UI", -font_size, "bold"),
+                padx=round(15 * scale), pady=round(5 * scale), cursor="hand2",
+            ).pack(side="left")
+            tk.Button(
+                buttons, text="Cancel", command=self.cancel,
+                bg=self._palette.button, activebackground=self._palette.button_hover,
+                fg=self._palette.text, activeforeground=self._palette.text,
+                relief="flat", font=("Segoe UI", -font_size),
+                padx=round(15 * scale), pady=round(5 * scale), cursor="hand2",
+            ).pack(side="left", padx=(max(8, round(8 * scale)), 0))
+            self._toolbar_monitor = monitor
+
+        self._update_dimensions()
+        self._toolbar.update_idletasks()
+        requested_width = self._toolbar.winfo_reqwidth()
+        requested_height = self._toolbar.winfo_reqheight()
+        scale = max(1.0, monitor.dpi_x / 96.0)
+        margin = max(16, round(16 * scale))
+        width = min(requested_width, max(1, monitor.width - 2 * margin))
+        height = min(requested_height, max(1, monitor.height - 2 * margin))
+        left = monitor.left + (monitor.width - width) // 2
+        top = monitor.top + margin
+        self._toolbar_bounds = (left, top, left + width, top + height)
+        # Tk interprets negative geometry offsets relative to the right/bottom
+        # of the virtual desktop. Create locally, then use signed Win32 pixels.
+        self._toolbar.withdraw()
+        self._toolbar.geometry(f"{width}x{height}+0+0")
+        self._toolbar.deiconify()
+        self._toolbar.update_idletasks()
+        self._place_native_rect(self._toolbar, left, top, width, height)
+        self._toolbar.lift()
+
+    def _update_dimensions(self) -> None:
+        if self._dimension_label is None:
+            return
+        index = self.panes.index(self._active_pane) + 1
+        left, top, right, bottom = self.rect
+        self._dimension_label.configure(
+            text=f"Display {index}  •  {right - left} × {bottom - top} px"
         )
 
     def _normalise_and_clamp(
@@ -367,6 +455,8 @@ class BoxEditorOverlay(_ScreenOverlay):
         return left, top, right, bottom
 
     def _draw(self) -> None:
+        if self._closed:
+            return
         for pane in self.panes:
             pane.canvas.delete("selection")
         pane = self._pane_for_rect(self.rect) or self._active_pane
@@ -378,31 +468,46 @@ class BoxEditorOverlay(_ScreenOverlay):
             canvas_top,
             canvas_right,
             canvas_bottom,
-            outline="#22c55e",
+            outline="#052e16",
+            width=6,
+            tags="selection",
+        )
+        pane.canvas.create_rectangle(
+            canvas_left,
+            canvas_top,
+            canvas_right,
+            canvas_bottom,
+            outline="#86efac",
             width=3,
             tags="selection",
         )
         pane.canvas.create_text(
             canvas_left + 8,
-            max(58, canvas_top - 12),
+            max(22, canvas_top - 12),
             anchor="sw",
             fill="#dcfce7",
             font=("Segoe UI", 10, "bold"),
             text=f"{right-left} × {bottom-top} px",
             tags="selection",
         )
+        size = self._handle_size(pane)
         for x, y in self._handle_positions():
             handle_x, handle_y = self.screen_to_canvas(x, y, pane)
             pane.canvas.create_rectangle(
-                handle_x - self.HANDLE_SIZE / 2,
-                handle_y - self.HANDLE_SIZE / 2,
-                handle_x + self.HANDLE_SIZE / 2,
-                handle_y + self.HANDLE_SIZE / 2,
+                handle_x - size / 2,
+                handle_y - size / 2,
+                handle_x + size / 2,
+                handle_y + size / 2,
                 fill="#f8fafc",
-                outline="#15803d",
-                width=2,
+                outline="#14532d",
+                width=3,
                 tags="selection",
             )
+        self._update_dimensions()
+
+    @staticmethod
+    def _handle_size(pane: _MonitorPane) -> int:
+        return max(18, round(18 * pane.monitor.dpi_x / 96))
 
     def _handle_positions(self) -> list[tuple[int, int]]:
         left, top, right, bottom = self.rect
@@ -411,12 +516,12 @@ class BoxEditorOverlay(_ScreenOverlay):
 
     def _hit_test(self, x: int, y: int) -> str:
         left, top, right, bottom = self.rect
-        distance = self.HANDLE_SIZE
+        distance = max(16, round(16 * self._active_pane.monitor.dpi_x / 96))
         names = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
         for name, (handle_x, handle_y) in zip(names, self._handle_positions()):
             if abs(x - handle_x) <= distance and abs(y - handle_y) <= distance:
                 return name
-        near = distance / 2
+        near = distance
         if left - near <= x <= right + near and top - near <= y <= bottom + near:
             if abs(y - top) <= near:
                 return "n"
@@ -430,9 +535,50 @@ class BoxEditorOverlay(_ScreenOverlay):
                 return "move"
         return ""
 
+    def _update_cursor(self, event: tk.Event, pane: _MonitorPane) -> None:
+        if self._active_handle:
+            return
+        x, y = self._event_position(pane, event)
+        hit = self._hit_test(x, y) if pane == self._active_pane else ""
+        cursor = {
+            "move": "fleur", "n": "size_ns", "s": "size_ns",
+            "e": "size_we", "w": "size_we",
+            "nw": "size_nw_se", "se": "size_nw_se",
+            "ne": "size_ne_sw", "sw": "size_ne_sw",
+        }.get(hit, "crosshair")
+        try:
+            pane.canvas.configure(cursor=cursor)
+        except tk.TclError:
+            pane.canvas.configure(cursor="crosshair")
+
+    def _on_key(self, event: tk.Event) -> str | None:
+        key = event.keysym
+        if key in {"Return", "KP_Enter"}:
+            self.confirm()
+            return "break"
+        if key == "Escape":
+            self.cancel()
+            return "break"
+        movement = {
+            "Left": (-1, 0), "Right": (1, 0),
+            "Up": (0, -1), "Down": (0, 1),
+        }.get(key)
+        if movement is None:
+            return None
+        step = 10 if event.state & 0x0001 else 1
+        dx, dy = movement[0] * step, movement[1] * step
+        left, top, right, bottom = self.rect
+        monitor = self._active_pane.monitor
+        dx = max(monitor.left - left, min(monitor.right - right, dx))
+        dy = max(monitor.top - top, min(monitor.bottom - bottom, dy))
+        self.rect = (left + dx, top + dy, right + dx, bottom + dy)
+        self._draw()
+        return "break"
+
     def _press(self, event: tk.Event, pane: _MonitorPane | None = None) -> None:
         pane = pane or self._active_pane
         x, y = self._event_position(pane, event)
+        self._old_pane = self._active_pane
         self._active_pane = pane
         self._drag_origin = (x, y)
         self._start_rect = self.rect
@@ -445,6 +591,8 @@ class BoxEditorOverlay(_ScreenOverlay):
             self._drag_origin = (x, y)
             self._active_handle = "new"
             self.rect = (x, y, x, y)
+            if self._toolbar_monitor != pane.monitor:
+                self._place_toolbar(pane)
             self._draw()
         try:
             pane.window.grab_set()
@@ -484,6 +632,9 @@ class BoxEditorOverlay(_ScreenOverlay):
     def _release(self, _event: tk.Event, _pane: _MonitorPane | None = None) -> None:
         if self._active_handle == "new" and (self.rect[2] - self.rect[0] < self.MIN_SIZE or self.rect[3] - self.rect[1] < self.MIN_SIZE):
             self.rect = self._old_rect
+            self._active_pane = self._old_pane
+            if self._toolbar_monitor != self._active_pane.monitor:
+                self._place_toolbar(self._active_pane)
             self._draw()
         self._active_handle = ""
         self._release_grabs()
@@ -502,6 +653,14 @@ class BoxEditorOverlay(_ScreenOverlay):
         self._finished = True
         self.close()
         self.master.after_idle(self._on_cancel)
+
+    def close(self) -> None:
+        if hasattr(self, "_toolbar"):
+            try:
+                self._toolbar.destroy()
+            except tk.TclError:
+                pass
+        super().close()
 
 
 class QuickSnippetOverlay(_ScreenOverlay):

@@ -10,6 +10,7 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 - Reads text you type or paste into the editable result box.
 - Follows speech with a highlighted visible row and current word.
 - Uses offline Windows OCR and installed Windows speech voices.
+- Switches between Standard OCR and adaptive Enhanced OCR for difficult screen text.
 - Conservatively corrects common game-font OCR mistakes while protecting fictional terminology.
 - Supports custom replacements, pronunciation previews, and protected game-specific words.
 - Provides configurable system-wide keyboard shortcuts.
@@ -41,6 +42,12 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.1-dev
+
+- Added **Reader → Text extraction → Standard / Enhanced** for both fixed-box and snippet captures. Standard remains the default.
+- Enhanced keeps the normal Windows OCR result unless a bounded, prepared-image pass offers clearly better text. It does not require PowerToys or use the clipboard.
+- Extra passes run only on weak-looking captures; on difficult images they may delay speech slightly. Existing OCR corrections and custom replacements still run afterward.
+
 ### Development build: 1.2.0-dev
 
 - Double-click a word during reading to seek forward or backward to that occurrence.
@@ -61,12 +68,14 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 ## Use
 
 1. Choose an installed Windows voice, speed, and volume.
-2. In **Capture area**, create or select a game profile, select **Set capture area**, then drag inside the outlined area to move it or drag an edge/handle to resize it. Press **Enter** to save or **Esc** to cancel.
+2. In **Capture area**, create or select a game profile, then select **Set capture area**. Drag inside the outlined area to move it, drag a handle to resize it, or drag elsewhere on either screen to draw a new area. The controls follow the capture monitor. Use the arrow keys to move the box by 1 px (Shift+arrows: 10 px), **Enter** to save, or **Esc** to cancel. Choose **Text extraction: Standard** for existing behavior or **Enhanced** for difficult fonts.
 3. Press the Fixed Box hotkey (default `Alt+Z`) to OCR and read the selected profile's area.
 4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
 5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
 
 Capture profiles can be created, renamed, deleted, and switched without a profile limit imposed by the UI. Each region stores its Windows display identity, original display bounds/DPI, absolute coordinates, and monitor-relative coordinates. Resolution, scaling, and arrangement changes are remapped on the same display; if that display is disconnected, the app asks you to edit/select an area instead of moving it onto an unrelated screen.
+
+Enhanced OCR uses the same offline Windows recognition engine as Standard. It can enlarge or adjust an image when the original read looks weak, then conservatively choose a result. It is **not** PowerToys Text Extractor and cannot guarantee the same output as Win+Shift+T. The selected mode is saved across updates and applies to both capture shortcuts; manually typed text and Read Again do not run OCR.
 
 ## OCR correction
 

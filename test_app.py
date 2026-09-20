@@ -425,6 +425,11 @@ class WindowsComponentTests(unittest.TestCase):
         self.assertEqual(requested["ocr"]["protected_words"], ["Naytiba", "Mother Sphere"])
         self.assertEqual(requested["ocr"]["replacements"][0]["replacement"], "Naytibas")
 
+    def test_text_extraction_mode_defaults_to_standard_and_validates_saved_choice(self) -> None:
+        self.assertEqual(validate_config({"ocr": {"strength": "balanced"}})["ocr"]["recognition_mode"], "standard")
+        self.assertEqual(validate_config({"ocr": {"recognition_mode": "enhanced"}})["ocr"]["recognition_mode"], "enhanced")
+        self.assertEqual(validate_config({"ocr": {"recognition_mode": "unknown"}})["ocr"]["recognition_mode"], "standard")
+
     def test_capture_processing_keeps_raw_text_and_returns_corrected_speech_text(self) -> None:
         app = GameTextReaderApplication.__new__(GameTextReaderApplication)
         app.corrector = OcrCorrector()
@@ -614,6 +619,33 @@ class WindowsComponentTests(unittest.TestCase):
             ui.capture_overlap_value.set(3)
             ui._save_capture_speech_settings()
             self.assertEqual(store.get()["speech"], {"capture_mode": "overlap", "max_overlap": 3})
+        finally:
+            root.destroy()
+            path.unlink(missing_ok=True)
+
+    def test_reader_extraction_selector_persists_and_survives_correction_changes(self) -> None:
+        class SilentTts:
+            @staticmethod
+            def list_voices() -> list[object]:
+                return []
+
+        path = Path(__file__).resolve().parent / "work" / "ui_extraction_test.json"
+        path.unlink(missing_ok=True)
+        root = __import__("tkinter").Tk()
+        root.withdraw()
+        try:
+            store = ConfigStore(path)
+            store.load()
+            ui = SettingsUI(root, store, SilentTts(), lambda: None, lambda: None, lambda: None, lambda *_: None)
+            root.update()
+            self.assertEqual(ui.recognition_mode.get(), "Standard")
+            ui.recognition_mode.set("Enhanced")
+            ui.recognition_mode_combo.event_generate("<<ComboboxSelected>>")
+            root.update()
+            self.assertEqual(store.get()["ocr"]["recognition_mode"], "enhanced")
+            ui.ocr_strength.set("Balanced")
+            ui.save_ocr_settings()
+            self.assertEqual(ConfigStore(path).load()["ocr"]["recognition_mode"], "enhanced")
         finally:
             root.destroy()
             path.unlink(missing_ok=True)

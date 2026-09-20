@@ -16,7 +16,7 @@ from typing import Callable
 from PIL import ImageGrab
 
 from app_resources import apply_window_icon
-from appearance import flush_windows_compositor
+from appearance import flush_windows_compositor, resolve_theme
 from capture_pipeline import CaptureJob, CaptureWorker, PipelineTimings
 from capture_profiles import CaptureProfileManager
 from config import ConfigStore
@@ -107,7 +107,10 @@ class GameTextReaderApplication:
         )
         self.capture_worker = CaptureWorker(
             capture=self._grab_screen,
-            recognise=self.ocr.recognise,
+            recognise=lambda image, snapshot, is_current: self.ocr.recognise_with_details(
+                image, mode=snapshot.get("ocr", {}).get("recognition_mode", "standard"),
+                is_current=is_current,
+            ),
             correct=lambda raw, snapshot: self.process_ocr_text(raw, snapshot.get("ocr", {})),
             on_result=self._capture_succeeded,
             on_error=self._capture_failed,
@@ -428,7 +431,10 @@ class GameTextReaderApplication:
             if was_visible:
                 self.show_window()
 
-        self._overlay = BoxEditorOverlay(self.root, existing_box, confirmed, cancelled)
+        self._overlay = BoxEditorOverlay(
+            self.root, existing_box, confirmed, cancelled,
+            palette=resolve_theme(self.config.get()["theme"]),
+        )
 
     def open_quick_snippet(self, restore_settings_after: bool = False) -> None:
         """Open a temporary Snipping Tool-style selector without modifying fixed-box state."""
@@ -548,7 +554,7 @@ class GameTextReaderApplication:
         if enabled:
             threading.Thread(target=self.corrector.warm_up, name="ocr-dictionary-load", daemon=True).start()
 
-    def _write_correction_debug(self, result: CorrectionResult) -> None:
+    def _write_correction_debug(self, result: CorrectionResult, job: CaptureJob, timings: PipelineTimings) -> None:
         """Write an opt-in, size-limited correction trace outside normal UI status."""
         log_path = self.config.path.with_name("ocr_debug.log")
         logger = logging.getLogger(f"game_text_reader.ocr.{log_path}")
@@ -563,6 +569,9 @@ class GameTextReaderApplication:
                                 for item in result.suggestions) or "none"
         logger.info("Raw OCR:\n%s\nCorrected:\n%s\nCorrections: %s\nNeeds review: %s",
                     result.raw_text, result.corrected_text, changes, suggestions)
+        logger.info("Text extraction: mode=%s variant=%s passes=%d OCR=%.1f ms",
+                    job.settings.get("ocr", {}).get("recognition_mode", "standard"),
+                    timings.ocr_variant, timings.ocr_attempts, timings.ocr_ms)
 
     def _write_performance_debug(self, timings: dict[str, float]) -> None:
         log_path = self.config.path.with_name("ocr_debug.log")
@@ -622,7 +631,7 @@ class GameTextReaderApplication:
     def _capture_succeeded(self, job: CaptureJob, result: CorrectionResult, timings: PipelineTimings) -> None:
         settings = dict(job.settings)
         if settings.get("ocr", {}).get("debug_logging"):
-            self._write_correction_debug(result)
+            self._write_correction_debug(result, job, timings)
         self.text_state.accept_success(result)
 
         def publish_result() -> None:
