@@ -1074,6 +1074,24 @@ class TtsEngine:
         self._put_command(_SpeechCommand('seek', request, target_id=request_id, source_offset=source_offset))
         return ticket
 
+    def cancel_request(self, request_id: int) -> bool:
+        """Cancel one active or waiting request without disturbing other speech."""
+        try:
+            target_id = int(request_id)
+        except (TypeError, ValueError):
+            return False
+        if target_id <= 0 or self._shutdown.is_set():
+            return False
+        with self._current_lock:
+            request = self._active_requests.get(target_id)
+            if request is None and self._pending_request is not None:
+                if self._pending_request.request_id == target_id:
+                    request = self._pending_request
+            if request is not None:
+                request.cancel.set()
+        self._put_command(_SpeechCommand("cancel", target_id=target_id))
+        return True
+
     def stop(self) -> None:
         """Interrupt all active playback and discard waiting speech."""
         with self._current_lock:
@@ -1451,6 +1469,26 @@ class TtsEngine:
                             for request, session in list(overlap_active.values()):
                                 self._finish_overlap(request, session, stop_backend=True)
                             overlap_active.clear()
+                        elif command.kind == "cancel":
+                            target_id = command.target_id
+                            if pending is not None and pending.request_id == target_id:
+                                self._cancel_queued(pending)
+                                pending = None
+                                self._set_pending(None)
+                            retained: deque[_SpeechRequest] = deque()
+                            while overlap_pending:
+                                queued = overlap_pending.popleft()
+                                if queued.request_id == target_id:
+                                    self._cancel_queued(queued)
+                                else:
+                                    retained.append(queued)
+                            overlap_pending = retained
+                            if active is not None and active.request_id == target_id:
+                                self._finish_active(active, stop_backend=True)
+                                active = None
+                            overlap = overlap_active.pop(target_id, None)
+                            if overlap is not None:
+                                self._finish_overlap(*overlap, stop_backend=True)
                         elif command.kind == 'seek' and command.request is not None:
                             sought = command.request
                             target_id = command.target_id

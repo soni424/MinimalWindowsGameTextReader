@@ -54,14 +54,37 @@ class DialogueGateTests(unittest.TestCase):
 
     def test_speed_validation_and_persistence(self):
         self.assertEqual(validate_config({"auto_read": {"speed": "FAST"}})["auto_read"]["speed"], "fast")
+        self.assertEqual(validate_config({"auto_read": {"speed": "INSTANT"}})["auto_read"]["speed"], "instant")
         self.assertEqual(validate_config({"auto_read": {"speed": "unsafe"}})["auto_read"]["speed"], "normal")
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "config.json"
             store = ConfigStore(path)
             store.load()
-            store.update(auto_read={"speed": "fast"})
+            store.update(auto_read={"speed": "instant"})
             reloaded = ConfigStore(path)
-            self.assertEqual(reloaded.load()["auto_read"]["speed"], "fast")
+            self.assertEqual(reloaded.load()["auto_read"]["speed"], "instant")
+
+    def test_instant_first_result_noise_similarity_and_blank_rearming(self):
+        policy = AUTO_READ_POLICIES["instant"]
+        gate = DialogueGate()
+        self.assertEqual(gate.observe("A complete line.", policy, now=0.0), "speak")
+        self.assertEqual(gate.observe("A complete line!", policy, now=0.1), "ignore")
+        self.assertEqual(gate.observe("A complete line!", policy, now=0.2), "speak")
+        self.assertEqual(gate.observe("", policy, now=0.3), "ignore")
+        self.assertEqual(gate.observe("", policy, now=0.4), "ignore")
+        self.assertEqual(gate.observe("x", policy, now=0.5), "ignore")
+        self.assertEqual(gate.observe("x", policy, now=0.6), "speak")
+
+    def test_instant_typewriter_growth_cancels_once_then_restarts_when_stable(self):
+        policy = AUTO_READ_POLICIES["instant"]
+        gate = DialogueGate()
+        self.assertEqual(gate.observe("I saw", policy, now=0.0), "speak")
+        self.assertEqual(gate.observe("I saw i", policy, now=0.1), "cancel_growth")
+        self.assertEqual(gate.observe("I saw it", policy, now=0.2), "ignore")
+        self.assertEqual(gate.observe("I saw it", policy, now=0.3), "ignore")
+        self.assertTrue(gate.needs_more_scans(policy, now=0.4))
+        self.assertEqual(gate.observe("I saw it", policy, now=0.46), "speak")
+        self.assertFalse(gate.recovering_growth)
 
     def test_auto_shortcut_uses_fourth_callback_and_cannot_duplicate_another_key(self):
         called = []
@@ -85,6 +108,24 @@ class WatcherTests(unittest.TestCase):
         self.assertFalse(gate.accept("A complete line."))
         self.assertTrue(gate.accept("A complete line."))
 
+    def test_instant_policy_is_bounded_and_cancels_only_current_growth(self):
+        instant = AUTO_READ_POLICIES["instant"]
+        self.assertEqual(instant.confirmations, 1)
+        self.assertLessEqual(instant.poll_interval, 0.06)
+        cancelled = []
+        watcher = AutoReadWatcher(
+            lambda _: None, lambda *_: True, lambda *_: None,
+            cancel_speech=lambda: cancelled.append(True), speed="instant",
+        )
+        watcher.active = True
+        watcher.session = 3
+        watcher.revision = 1
+        self.assertTrue(watcher.accept_result(3, 1, "The first fragment"))
+        self.assertFalse(watcher.accept_result(3, 1, "The first fragment grows"))
+        self.assertEqual(cancelled, [True])
+        self.assertFalse(watcher.accept_result(2, 1, "Stale growth must not cancel"))
+        self.assertEqual(cancelled, [True])
+
     def test_switching_speed_keeps_active_game_and_dialogue_history(self):
         states = []
         watcher = AutoReadWatcher(lambda _: None, lambda *_: True, lambda *args: states.append(args))
@@ -97,6 +138,12 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(watcher.target, GAME)
         self.assertEqual(watcher.gate.last_spoken, "already spoken")
         self.assertIn("Fast mode", states[-1][1])
+        watcher.gate.candidate = "transient"
+        watcher.gate.confirmations = 1
+        watcher.set_speed("instant")
+        self.assertEqual(watcher.gate.candidate, "")
+        self.assertEqual(watcher.gate.last_spoken, "already spoken")
+        self.assertIn("Instant mode", states[-1][1])
 
     def test_arm_bind_pause_resume_and_stop_rejects_stale_ocr(self):
         foreground = [None]

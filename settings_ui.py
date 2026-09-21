@@ -1081,7 +1081,7 @@ class SettingsUI:
             ttk.Combobox(
                 speed_row,
                 textvariable=self.auto_read_speed,
-                values=("Normal", "Fast"),
+                values=("Normal", "Fast", "Instant"),
                 state="readonly",
                 width=12,
             )
@@ -1092,7 +1092,8 @@ class SettingsUI:
         )
         ttk.Label(
             speed_row,
-            text="Fast uses shorter stable-text checks while retaining two OCR confirmations.",
+            text=("Fast keeps two OCR confirmations. Instant reads the first usable result, "
+                  "then safely cancels and restarts if typewriter text is still growing."),
             style="CardHint.TLabel",
         ).pack(side="left", padx=(12, 0))
         ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
@@ -1493,7 +1494,7 @@ class SettingsUI:
 
     def _auto_read_speed_changed(self, _event: object | None = None) -> None:
         requested = self.auto_read_speed.get().strip().lower()
-        if requested not in {"normal", "fast"}:
+        if requested not in {"normal", "fast", "instant"}:
             requested = "normal"
         try:
             saved = self.on_auto_read_speed_changed(requested)

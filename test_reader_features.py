@@ -229,14 +229,14 @@ class ReaderUiTests(unittest.TestCase):
         def save_speed(speed):
             return self.store.update(auto_read={"speed": speed})["auto_read"]["speed"]
         self.ui.on_auto_read_speed_changed = save_speed
-        self.ui.auto_read_speed.set("Fast")
+        self.ui.auto_read_speed.set("Instant")
         self.ui._auto_read_speed_changed()
-        self.assertEqual(self.store.get()["auto_read"]["speed"], "fast")
-        self.assertEqual(self.ui.auto_read_speed.get(), "Fast")
+        self.assertEqual(self.store.get()["auto_read"]["speed"], "instant")
+        self.assertEqual(self.ui.auto_read_speed.get(), "Instant")
         self.ui.on_auto_read_speed_changed = lambda _speed: (_ for _ in ()).throw(PermissionError("locked"))
         self.ui.auto_read_speed.set("Normal")
         self.ui._auto_read_speed_changed()
-        self.assertEqual(self.ui.auto_read_speed.get(), "Fast")
+        self.assertEqual(self.ui.auto_read_speed.get(), "Instant")
         self.assertIn("could not be saved", self.ui.status_value.get())
     def test_context_rule_workflows_cancel_and_duplicate_editing(self):
         text = "bock bock"

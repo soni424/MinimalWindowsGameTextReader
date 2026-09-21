@@ -120,9 +120,11 @@ class GameTextReaderApplication:
         )
         self._capture_submit_lock = threading.Lock()
         self._manual_capture_pending = False
+        self._auto_read_request_id: int | None = None
         self.auto_read = AutoReadWatcher(
             self._grab_screen, self._submit_auto_image, self._auto_read_state,
             area_valid=self._auto_area_valid,
+            cancel_speech=self._cancel_auto_read_speech,
             speed=settings.get("auto_read", {}).get("speed", "normal"),
         )
         self.hotkeys = HotkeyManager(
@@ -280,8 +282,20 @@ class GameTextReaderApplication:
             self._write_performance_debug(measured)
 
     def _speech_finished(self, request_id: int, text: str) -> None:
+        if request_id == getattr(self, "_auto_read_request_id", None):
+            self._auto_read_request_id = None
         self.text_state.end_speech(text, request_id)
         self._schedule(lambda: self.ui.clear_speech_progress(request_id))
+
+    def _cancel_auto_read_speech(self) -> None:
+        """Stop only the latest Auto-Read request during Instant growth recovery."""
+        request_id = getattr(self, "_auto_read_request_id", None)
+        self._auto_read_request_id = None
+        if request_id is None:
+            return
+        cancel = getattr(self.tts, "cancel_request", None)
+        if callable(cancel):
+            cancel(request_id)
 
     def _speech_document_started(self, request_id: int, source_text: str) -> None:
         """Give the newest mapped reading highlight ownership immediately."""
@@ -528,7 +542,7 @@ class GameTextReaderApplication:
         self.auto_read.start(resolution.box, profile)
 
     def set_auto_read_speed(self, speed: str) -> str:
-        """Persist and apply Normal/Fast timing without restarting an active watch."""
+        """Persist and apply Auto-Read timing without restarting an active watch."""
         saved = self.config.update(auto_read={"speed": speed})["auto_read"]["speed"]
         self.auto_read.set_speed(saved)
         return saved
@@ -551,6 +565,7 @@ class GameTextReaderApplication:
     def stop_speech(self) -> None:
         """Interrupt current playback and clear speech waiting in the queue."""
         self.auto_read.stop("Auto-Read stopped with audio.")
+        self._auto_read_request_id = None
         self.tts.stop()
         if hasattr(self, "text_state"):
             self.text_state.end_speech()
@@ -744,13 +759,16 @@ class GameTextReaderApplication:
         self._schedule(lambda: self.ui.set_status(f"{job.source}: {speech_status}{suffix}."))
         if capture_mode == "replace":
             replace = getattr(self.tts, "replace", None) or self.tts.speak
-            replace(document, voice, rate, volume)
+            ticket = replace(document, voice, rate, volume)
         elif capture_mode == "overlap":
             overlap = getattr(self.tts, "overlap", None) or self.tts.speak
-            overlap(document, voice, rate, volume)
+            ticket = overlap(document, voice, rate, volume)
         else:
             enqueue = getattr(self.tts, "enqueue", None) or self.tts.speak
-            enqueue(document, voice, rate, volume)
+            ticket = enqueue(document, voice, rate, volume)
+        if is_auto:
+            request_id = getattr(ticket, "request_id", None)
+            self._auto_read_request_id = request_id if isinstance(request_id, int) else None
 
     def _capture_failed(self, job: CaptureJob, exc: Exception) -> None:
         if job.auto_session is not None:

@@ -320,7 +320,7 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         capture_mode = DEFAULT_CONFIG["speech"]["capture_mode"]
     auto_read_speed = raw_auto_read.get("speed", DEFAULT_CONFIG["auto_read"]["speed"])
     auto_read_speed = auto_read_speed.strip().lower() if isinstance(auto_read_speed, str) else "normal"
-    if auto_read_speed not in {"normal", "fast"}:
+    if auto_read_speed not in {"normal", "fast", "instant"}:
         auto_read_speed = "normal"
     max_overlap = _clamp_int(
         raw_speech.get("max_overlap"),

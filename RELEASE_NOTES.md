@@ -1,13 +1,18 @@
-# Game Text Reader 1.2.3-dev
+# Game Text Reader 1.2.4-dev
 
 Development build for testing before a stable release.
 
-## Fast but stable Auto-Read
+## Guarded Instant Auto-Read
 
-- Added a remembered **Normal / Fast** speed selector for Auto-Read. Existing configurations default to Normal.
-- Fast mode samples the fixed box about every 120 ms, waits roughly 180 ms for visual stability, and still requires two matching corrected OCR results before speaking.
-- Auto-Read permits only one pending OCR request, preserving manual-capture priority and preventing animated frames from creating unbounded work.
-- Normal keeps the original conservative timings. Both modes retain focus pausing, duplicate suppression, blank-frame re-arming, error backoff, and stale-session rejection.
+- Added a remembered **Normal / Fast / Instant** speed selector. Existing configurations still default to Normal.
+- Instant samples and settles at roughly 60 ms and can speak the first usable OCR result. Tiny/noisy and near-duplicate results still require confirmation.
+- Typewriter growth cancels only the partial Auto-Read request, suppresses intermediate fragments, then restarts the completed line after two matches and roughly 250 ms unchanged.
+- Targeted cancellation leaves manual, queued, and overlapping speech alone. Empty reads, duplicates, stale work, lost focus, and repeated errors retain their existing safeguards.
+
+## Previous development build: 1.2.3-dev
+
+- Added Fast Auto-Read with shorter stable-text checks and two-result confirmation.
+- Bounded Auto-Read to one pending OCR request while preserving manual-capture priority.
 
 ## Previous development build: 1.2.2-dev
 

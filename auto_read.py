@@ -7,6 +7,7 @@ the application's existing OCR worker and accepts corrected text back from it.
 from __future__ import annotations
 
 import ctypes
+import difflib
 import os
 import re
 import threading
@@ -26,11 +27,14 @@ class AutoReadPolicy:
     settle_delay: float
     confirmation_interval: float
     idle_rescan_interval: float
+    confirmations: int = 2
+    growth_stability: float = 0.0
 
 
 AUTO_READ_POLICIES = {
     "normal": AutoReadPolicy("normal", 0.35, 0.50, 0.40, 2.0),
     "fast": AutoReadPolicy("fast", 0.12, 0.18, 0.12, 1.0),
+    "instant": AutoReadPolicy("instant", 0.06, 0.06, 0.06, 0.75, 1, 0.25),
 }
 
 
@@ -97,34 +101,118 @@ def normalize_dialogue(text: str) -> str:
 
 
 class DialogueGate:
-    """Require two matching OCR results; two blanks re-arm an identical later line."""
+    """Suppress duplicates and guard first-result playback from unstable OCR."""
 
     def __init__(self) -> None:
         self.candidate = ""
         self.confirmations = 0
         self.last_spoken = ""
+        self.candidate_since = 0.0
+        self.recovering_growth = False
+        self.growth_origin = ""
 
-    def accept(self, text: str) -> bool:
+    @staticmethod
+    def _usable(value: str) -> bool:
+        return sum(character.isalnum() for character in value) >= 2
+
+    @staticmethod
+    def _similar(left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        return difflib.SequenceMatcher(None, left, right, autojunk=False).ratio() >= 0.85
+
+    @staticmethod
+    def _extends(prefix: str, value: str) -> bool:
+        return bool(prefix and len(value) > len(prefix) and value.startswith(prefix))
+
+    def reset_candidate(self) -> None:
+        """Drop transient confirmation/recovery state while retaining deduplication."""
+        self.candidate = ""
+        self.confirmations = 0
+        self.candidate_since = 0.0
+        self.recovering_growth = False
+        self.growth_origin = ""
+
+    def observe(self, text: str, policy: AutoReadPolicy, *, now: float | None = None) -> str:
+        """Return ``speak``, ``cancel_growth``, or ``ignore`` for one OCR result."""
+        timestamp = time.monotonic() if now is None else now
         value = normalize_dialogue(text)
         if value != self.candidate:
             self.candidate = value
             self.confirmations = 1
+            self.candidate_since = timestamp
         else:
             self.confirmations += 1
-        if self.confirmations < 2:
-            return False
+
+        # Two confirmed blank reads re-arm an identical later line in every mode.
         if not value:
-            self.last_spoken = ""
-            return False
+            if self.confirmations >= 2:
+                self.last_spoken = ""
+                self.recovering_growth = False
+                self.growth_origin = ""
+            return "ignore"
+
+        if policy.speed != "instant":
+            if self.confirmations < policy.confirmations or value == self.last_spoken:
+                return "ignore"
+            self.last_spoken = value
+            return "speak"
+
+        # If an Instant line grows after speech started, stop only that request,
+        # suppress intermediate fragments, and wait for the final line to settle.
+        if self._extends(self.last_spoken, value) and not self.recovering_growth:
+            self.recovering_growth = True
+            self.growth_origin = self.last_spoken
+            return "cancel_growth"
+
+        if self.recovering_growth:
+            related = self._extends(self.growth_origin, value) or self._similar(self.growth_origin, value)
+            if not related:
+                # A genuinely different dialogue line arrived before recovery
+                # completed. Do not make it inherit the old fragment's delay.
+                self.recovering_growth = False
+                self.growth_origin = ""
+            elif (
+                self.confirmations >= 2
+                and timestamp - self.candidate_since >= policy.growth_stability
+            ):
+                self.last_spoken = value
+                self.recovering_growth = False
+                self.growth_origin = ""
+                return "speak"
+            else:
+                return "ignore"
+
         if value == self.last_spoken:
-            return False
+            return "ignore"
+        # Tiny/noise-like OCR and small jitter around the previous line still
+        # need two identical results. Completely different usable text does not.
+        needs_confirmation = not self._usable(value) or self._similar(self.last_spoken, value)
+        if needs_confirmation and self.confirmations < 2:
+            return "ignore"
         self.last_spoken = value
-        return True
+        return "speak"
+
+    def needs_more_scans(self, policy: AutoReadPolicy, *, now: float | None = None) -> bool:
+        if policy.speed != "instant":
+            return self.confirmations < policy.confirmations
+        if self.recovering_growth:
+            timestamp = time.monotonic() if now is None else now
+            return self.confirmations < 2 or timestamp - self.candidate_since < policy.growth_stability
+        if not self.candidate or not self._usable(self.candidate) or self._similar(self.last_spoken, self.candidate):
+            return self.confirmations < 2
+        return False
+
+    def accept(self, text: str) -> bool:
+        return self.observe(text, AUTO_READ_POLICIES["normal"]) == "speak"
 
     def remember_manual(self, text: str) -> None:
         self.last_spoken = normalize_dialogue(text)
         self.candidate = self.last_spoken
         self.confirmations = 2
+        self.candidate_since = time.monotonic()
+        self.recovering_growth = False
+        self.growth_origin = ""
 
 
 class AutoReadWatcher:
@@ -138,6 +226,7 @@ class AutoReadWatcher:
         foreground: Callable[[], ForegroundWindow | None] = foreground_window,
         exists: Callable[[ForegroundWindow], bool] = window_exists,
         area_valid: Callable[[tuple[int, int, int, int]], bool] | None = None,
+        cancel_speech: Callable[[], None] | None = None,
         *,
         speed: str = "normal",
         interval: float | None = None,
@@ -148,6 +237,7 @@ class AutoReadWatcher:
         self.foreground = foreground
         self.exists = exists
         self.area_valid = area_valid or (lambda _box: True)
+        self.cancel_speech = cancel_speech or (lambda: None)
         if speed not in AUTO_READ_POLICIES:
             raise ValueError(f"Unknown Auto-Read speed: {speed!r}")
         self._speed = speed
@@ -187,6 +277,8 @@ class AutoReadWatcher:
                 policy.settle_delay,
                 policy.confirmation_interval,
                 policy.idle_rescan_interval,
+                policy.confirmations,
+                policy.growth_stability,
             )
 
     def set_speed(self, speed: str) -> None:
@@ -198,6 +290,7 @@ class AutoReadWatcher:
             if normalised == self._speed:
                 return
             self._speed = normalised
+            self.gate.reset_candidate()
             self._last_change = time.monotonic()
             self._last_scan_revision = -1
             active = self.active
@@ -263,7 +356,12 @@ class AutoReadWatcher:
                 return False
             self._errors = 0
             self._retry_after = 0.0
-            return self.gate.accept(text)
+            outcome = self.gate.observe(text, self.policy)
+            cancel_growth = outcome == "cancel_growth"
+            should_speak = outcome == "speak"
+        if cancel_growth:
+            self.cancel_speech()
+        return should_speak
 
     def note_error(self, session: int, revision: int, message: str) -> None:
         with self._lock:
@@ -302,14 +400,14 @@ class AutoReadWatcher:
         last_change: float,
         last_ocr: float,
         last_scan_revision: int,
-        confirmations: int,
+        needs_more_scans: bool,
         policy: AutoReadPolicy,
     ) -> bool:
         if now - last_ocr < policy.confirmation_interval:
             return False
         quiet_candidate = (
             now - last_change >= policy.settle_delay
-            and (revision != last_scan_revision or confirmations < 2)
+            and (revision != last_scan_revision or needs_more_scans)
         )
         return quiet_candidate or now - last_ocr >= policy.idle_rescan_interval
 
@@ -394,7 +492,7 @@ class AutoReadWatcher:
                     self._last_change,
                     self._last_ocr,
                     self._last_scan_revision,
-                    self.gate.confirmations,
+                    self.gate.needs_more_scans(policy, now=now),
                     policy,
                 )
                 if not due:

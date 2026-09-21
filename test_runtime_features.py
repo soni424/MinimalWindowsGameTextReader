@@ -786,6 +786,94 @@ class ApplicationSpeechRoutingTests(unittest.TestCase):
 
 
 class SpeechResourceTests(unittest.TestCase):
+    def test_targeted_cancel_handles_pending_and_completed_requests_safely(self) -> None:
+        class Session:
+            def __init__(self) -> None:
+                self.finished = False
+
+            def prepare(self, _voice_id: str) -> None:
+                pass
+
+            def start(self, _request: object, on_started: object, replace: bool = False) -> None:
+                self.finished = False
+                on_started()  # type: ignore[operator]
+
+            def poll(self) -> bool:
+                return self.finished
+
+            def stop(self) -> None:
+                self.finished = True
+
+            def close(self) -> None:
+                pass
+
+        session = Session()
+        engine = TtsEngine(session_factory=lambda: session)
+        try:
+            active = engine.enqueue("Active manual voice")
+            deadline = time.monotonic() + 1
+            while active.request_id not in engine._active_requests and time.monotonic() < deadline:
+                time.sleep(0.01)
+            pending = engine.enqueue("Pending Auto-Read voice")
+            deadline = time.monotonic() + 1
+            while engine._pending_request is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(engine.cancel_request(pending.request_id))
+            self.assertTrue(pending.wait(1))
+            self.assertFalse(active.wait(0.05))
+            session.finished = True
+            self.assertTrue(active.wait(1))
+            # Completion makes targeted cancellation a harmless no-op.
+            self.assertTrue(engine.cancel_request(active.request_id))
+            self.assertTrue(engine.wait_until_idle(1))
+        finally:
+            engine.shutdown()
+
+    def test_targeted_cancel_does_not_stop_an_unrelated_overlapping_voice(self) -> None:
+        sessions: list[object] = []
+
+        class Session:
+            def __init__(self) -> None:
+                self.finished = False
+                self.stopped = False
+                sessions.append(self)
+
+            def prepare(self, _voice_id: str) -> None:
+                pass
+
+            def start(self, _request: object, on_started: object, replace: bool = False) -> None:
+                on_started()  # type: ignore[operator]
+
+            def poll(self) -> bool:
+                return self.finished
+
+            def stop(self) -> None:
+                self.stopped = True
+                self.finished = True
+
+            def close(self) -> None:
+                pass
+
+        engine = TtsEngine(session_factory=Session, initial_capture_mode="overlap", initial_max_overlap=2)
+        try:
+            first = engine.overlap("Partial Auto-Read")
+            second = engine.overlap("Unrelated manual speech")
+            deadline = time.monotonic() + 1
+            while len(sessions) < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(len(sessions), 2)
+            self.assertTrue(engine.cancel_request(first.request_id))
+            self.assertTrue(first.wait(1))
+            self.assertFalse(second.wait(0.05))
+            self.assertTrue(sessions[0].stopped)  # type: ignore[attr-defined]
+            self.assertFalse(sessions[1].stopped)  # type: ignore[attr-defined]
+            self.assertTrue(engine.cancel_request(999999))
+            self.assertFalse(second.wait(0.05))
+            sessions[1].finished = True  # type: ignore[attr-defined]
+            self.assertTrue(second.wait(1))
+        finally:
+            engine.shutdown()
+
     def test_mapped_speech_emits_source_word_progress(self) -> None:
         progress: list[tuple[int, str, int, int]] = []
         started_documents: list[tuple[int, str]] = []
