@@ -6,8 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
-APP_VERSION = '1.2.2-dev'
-FILE_VERSION = (1, 2, 2, 0)
+APP_VERSION = '1.2.3-dev'
+FILE_VERSION = (1, 2, 3, 0)
 
 
 def source_build_info() -> dict[str, str]:

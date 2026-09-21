@@ -25,6 +25,7 @@ KNOWN_CONFIG_KEYS = frozenset(
         "rate",
         "volume",
         "speech",
+        "auto_read",
         "startup",
         "fixed_box",
         "window",
@@ -47,6 +48,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "speech": {
         "capture_mode": "replace",
         "max_overlap": 2,
+    },
+    "auto_read": {
+        "speed": "normal",
     },
     "startup": {
         "enabled": False,
@@ -308,11 +312,16 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     raw_hotkeys = raw.get("hotkeys") if isinstance(raw.get("hotkeys"), Mapping) else {}
     raw_ocr = raw.get("ocr") if isinstance(raw.get("ocr"), Mapping) else {}
     raw_speech = raw.get("speech") if isinstance(raw.get("speech"), Mapping) else {}
+    raw_auto_read = raw.get("auto_read") if isinstance(raw.get("auto_read"), Mapping) else {}
     raw_startup = raw.get("startup") if isinstance(raw.get("startup"), Mapping) else {}
     capture_mode = raw_speech.get("capture_mode", DEFAULT_CONFIG["speech"]["capture_mode"])
     capture_mode = capture_mode.strip().lower() if isinstance(capture_mode, str) else DEFAULT_CONFIG["speech"]["capture_mode"]
     if capture_mode not in {"queue", "replace", "overlap"}:
         capture_mode = DEFAULT_CONFIG["speech"]["capture_mode"]
+    auto_read_speed = raw_auto_read.get("speed", DEFAULT_CONFIG["auto_read"]["speed"])
+    auto_read_speed = auto_read_speed.strip().lower() if isinstance(auto_read_speed, str) else "normal"
+    if auto_read_speed not in {"normal", "fast"}:
+        auto_read_speed = "normal"
     max_overlap = _clamp_int(
         raw_speech.get("max_overlap"),
         2,
@@ -344,6 +353,9 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "speech": {
             "capture_mode": capture_mode,
             "max_overlap": max_overlap,
+        },
+        "auto_read": {
+            "speed": auto_read_speed,
         },
         "startup": {
             "enabled": _normalise_bool(
@@ -541,7 +553,7 @@ class ConfigStore:
         with self._lock:
             updated = self.get()
             for key, value in changes.items():
-                if key in {"hotkeys", "ocr", "speech"} and isinstance(value, Mapping):
+                if key in {"hotkeys", "ocr", "speech", "auto_read"} and isinstance(value, Mapping):
                     updated[key].update(value)
                 else:
                     updated[key] = value

@@ -442,6 +442,7 @@ class SettingsUI:
         on_profile_delete: Callable[[str], None] | None = None,
         on_profile_select: Callable[[str], None] | None = None,
         on_toggle_auto_read: Callable[[], None] | None = None,
+        on_auto_read_speed_changed: Callable[[str], str] | None = None,
         on_stop_speech: Callable[[], None] | None = None,
     ) -> None:
         self.root = root
@@ -465,6 +466,7 @@ class SettingsUI:
         self.on_profile_delete = on_profile_delete or (lambda _profile_id: None)
         self.on_profile_select = on_profile_select or (lambda _profile_id: None)
         self.on_toggle_auto_read = on_toggle_auto_read or (lambda: None)
+        self.on_auto_read_speed_changed = on_auto_read_speed_changed or (lambda speed: speed)
         self.on_stop_speech = on_stop_speech
         self._voices: dict[str, Voice] = {}
         self._voice_labels: dict[str, str] = {}
@@ -509,6 +511,9 @@ class SettingsUI:
         self._profile_name_by_id: dict[str, str] = {}
         self.box_value = tk.StringVar()
         self.auto_read_status = tk.StringVar(value="Auto-Read is off.")
+        self.auto_read_speed = tk.StringVar(
+            value=settings.get("auto_read", {}).get("speed", "normal").title()
+        )
         self.capture_meta = tk.StringVar(
             value="Type or paste text here, or capture text from the screen."
         )
@@ -1069,10 +1074,31 @@ class SettingsUI:
         self.recognition_mode_combo.bind("<<ComboboxSelected>>", self._recognition_mode_changed)
         ttk.Label(extraction_row, text="Enhanced adapts difficult images and may take longer.",
                   style="CardHint.TLabel").pack(side="left", padx=(12, 0))
-        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.", style="CardHint.TLabel").grid(row=4, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        speed_row = ttk.Frame(box_card, style="CardInner.TFrame")
+        speed_row.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(speed_row, text="Auto-Read speed", style="CardText.TLabel").pack(side="left", padx=(0, 8))
+        self.auto_read_speed_combo = self._register_combobox(
+            ttk.Combobox(
+                speed_row,
+                textvariable=self.auto_read_speed,
+                values=("Normal", "Fast"),
+                state="readonly",
+                width=12,
+            )
+        )
+        self.auto_read_speed_combo.pack(side="left")
+        self.auto_read_speed_combo.bind(
+            "<<ComboboxSelected>>", self._auto_read_speed_changed
+        )
+        ttk.Label(
+            speed_row,
+            text="Fast uses shorter stable-text checks while retaining two OCR confirmations.",
+            style="CardHint.TLabel",
+        ).pack(side="left", padx=(12, 0))
+        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.", style="CardHint.TLabel").grid(row=5, column=0, columnspan=2, sticky="w", pady=(3, 0))
         ttk.Label(box_card, textvariable=self.auto_read_status, style="CardHint.TLabel", wraplength=680).grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(3, 0)
+            row=6, column=0, columnspan=2, sticky="w", pady=(3, 0)
         )
 
         captured = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
@@ -1464,6 +1490,20 @@ class SettingsUI:
         saved = self.config.update(ocr={"recognition_mode": mode})["ocr"]
         self.recognition_mode.set(saved["recognition_mode"].title())
         self.set_status(f"Text extraction set to {self.recognition_mode.get()} for the next capture.")
+
+    def _auto_read_speed_changed(self, _event: object | None = None) -> None:
+        requested = self.auto_read_speed.get().strip().lower()
+        if requested not in {"normal", "fast"}:
+            requested = "normal"
+        try:
+            saved = self.on_auto_read_speed_changed(requested)
+        except Exception as exc:
+            current = self.config.get().get("auto_read", {}).get("speed", "normal")
+            self.auto_read_speed.set(str(current).title())
+            self.set_status(f"Auto-Read speed could not be saved: {exc}", error=True)
+            return
+        self.auto_read_speed.set(str(saved).title())
+        self.set_status(f"Auto-Read speed set to {self.auto_read_speed.get()}.")
 
     def _selected_replacement_index(self) -> int | None:
         selected = self.replacement_tree.selection()

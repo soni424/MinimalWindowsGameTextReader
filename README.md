@@ -43,6 +43,12 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.3-dev
+
+- Added a persistent **Auto-Read speed: Normal / Fast** selector in the Reader tab. Existing installations remain on Normal by default.
+- Fast mode checks the fixed box about every 120 ms and begins OCR after roughly 180 ms of visual stability. It still requires two matching corrected OCR results before speaking, so typewriter fragments and OCR flicker are not intentionally read aloud.
+- Auto-Read now avoids taking more screenshots while an OCR job is pending. This bounds CPU/OCR work and prevents rapidly changing frames from invalidating every recognition result.
+
 ### Development build: 1.2.2-dev
 
 - Added **Start Auto-Read** beside the fixed capture controls, a tray toggle, and an optional configurable global shortcut (unassigned by default).
@@ -80,7 +86,9 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
 5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
 
-For hands-free dialogue, select a tightly framed saved capture area around the game's dialogue text, then choose **Start Auto-Read** in the Reader tab (or the tray menu). If settings are in front, return to the game within 30 seconds; starting through an assigned Auto-Read shortcut while in the game binds it immediately. The app watches that one game window only, checks the box roughly every 350 ms, and speaks a line after the image and corrected OCR text settle. A new confirmed line replaces the previous Auto-Read voice. It pauses new captures when you switch away and resumes when you return. Stop it with the same button/shortcut/tray action or **Stop audio**. Auto-Read reads voiced and unvoiced game dialogue alike; it cannot detect whether the game itself is speaking. An identical line must disappear long enough for two blank OCR checks before it can be read again.
+For hands-free dialogue, select a tightly framed saved capture area around the game's dialogue text, then choose **Start Auto-Read** in the Reader tab (or the tray menu). If settings are in front, return to the game within 30 seconds; starting through an assigned Auto-Read shortcut while in the game binds it immediately. Choose **Normal** for the original conservative timing or **Fast** for rapid dialogue advances. Normal checks about every 350 ms and waits roughly 500 ms for visual stability; Fast checks about every 120 ms and waits roughly 180 ms. Both modes require two matching corrected OCR results before speech, so Fast is designed to feel immediate after fully rendered text without deliberately reading an unfinished typewriter line. On a clear Standard OCR capture, Fast targets roughly 300–600 ms after the completed line appears; Enhanced OCR or difficult text can take longer.
+
+The app watches only the bound game window. A new confirmed line replaces the previous Auto-Read voice. Auto-Read pauses new captures when you switch away and resumes when you return. Stop it with the same button/shortcut/tray action or **Stop audio**. It reads voiced and unvoiced game dialogue alike; it cannot detect whether the game itself is speaking. An identical line must disappear long enough for two blank OCR checks before it can be read again. Auto-Read starts off each session, while the selected Normal/Fast speed is remembered across restarts and updates.
 
 **Exclusive fullscreen games:** **Select a Snippet** opens a visual selection overlay, which may cause a true exclusive-fullscreen game to minimize or leave fullscreen. Use **Borderless** or **Windowed Fullscreen** in the game's display settings for snippet selection. If you prefer exclusive fullscreen, use a saved **Read Fixed Box** area instead; it captures without opening the selection overlay. This is a Windows fullscreen/overlay limitation, not specific to one game; see [Microsoft's DXGI fullscreen guidance](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/d3d10-graphics-programming-guide-dxgi).
 
@@ -165,7 +173,7 @@ The tracked version in `app_version.py` is shared by the header and executable m
 python -m unittest discover -v
 ```
 
-The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, themed scrollbars, pronunciation previews, Windows startup registration, Auto-Read deduplication and stale-job rejection, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
+The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, themed scrollbars, pronunciation previews, Windows startup registration, Normal/Fast Auto-Read timing, deduplication, bounded pending work and stale-job rejection, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
 
 ## App icon assets
 

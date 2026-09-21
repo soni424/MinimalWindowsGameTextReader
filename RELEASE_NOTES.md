@@ -1,6 +1,20 @@
-# Game Text Reader 1.2.1-dev
+# Game Text Reader 1.2.3-dev
 
 Development build for testing before a stable release.
+
+## Fast but stable Auto-Read
+
+- Added a remembered **Normal / Fast** speed selector for Auto-Read. Existing configurations default to Normal.
+- Fast mode samples the fixed box about every 120 ms, waits roughly 180 ms for visual stability, and still requires two matching corrected OCR results before speaking.
+- Auto-Read permits only one pending OCR request, preserving manual-capture priority and preventing animated frames from creating unbounded work.
+- Normal keeps the original conservative timings. Both modes retain focus pausing, duplicate suppression, blank-frame re-arming, error backoff, and stale-session rejection.
+
+## Previous development build: 1.2.2-dev
+
+- Added foreground-bound Auto-Read for the selected fixed capture profile, with Reader, tray, and optional global-shortcut controls.
+- Auto-Read starts off each session, pauses on Alt-Tab, and replaces the prior automatic voice when confirmed dialogue changes.
+
+## Previous development build: 1.2.1-dev
 
 ## Switchable text extraction
 

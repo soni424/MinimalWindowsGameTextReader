@@ -123,6 +123,7 @@ class GameTextReaderApplication:
         self.auto_read = AutoReadWatcher(
             self._grab_screen, self._submit_auto_image, self._auto_read_state,
             area_valid=self._auto_area_valid,
+            speed=settings.get("auto_read", {}).get("speed", "normal"),
         )
         self.hotkeys = HotkeyManager(
             on_fixed=self._fixed_hotkey_received,
@@ -139,6 +140,7 @@ class GameTextReaderApplication:
             on_draw_box=self.open_box_editor,
             on_read_box=lambda: self.read_fixed_box(hide_settings=True),
             on_toggle_auto_read=self.toggle_auto_read,
+            on_auto_read_speed_changed=self.set_auto_read_speed,
             on_stop_speech=self.stop_speech,
             on_quick_snippet=lambda: self.open_quick_snippet(restore_settings_after=True),
             on_apply_hotkeys=self.apply_hotkeys,
@@ -524,6 +526,12 @@ class GameTextReaderApplication:
              if item.get("id") == profile_id), "Profile"
         )
         self.auto_read.start(resolution.box, profile)
+
+    def set_auto_read_speed(self, speed: str) -> str:
+        """Persist and apply Normal/Fast timing without restarting an active watch."""
+        saved = self.config.update(auto_read={"speed": speed})["auto_read"]["speed"]
+        self.auto_read.set_speed(saved)
+        return saved
 
     def _submit_auto_image(
         self, image: object, box: tuple[int, int, int, int], session: int, revision: int

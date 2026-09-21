@@ -225,6 +225,19 @@ class ReaderUiTests(unittest.TestCase):
     def select(self, text, start, end):
         self.ui.set_last_text(text)
         self.ui.captured_text.tag_add("sel", f"1.0 + {start} chars", f"1.0 + {end} chars")
+    def test_auto_read_speed_selector_saves_and_rolls_back_on_failure(self):
+        def save_speed(speed):
+            return self.store.update(auto_read={"speed": speed})["auto_read"]["speed"]
+        self.ui.on_auto_read_speed_changed = save_speed
+        self.ui.auto_read_speed.set("Fast")
+        self.ui._auto_read_speed_changed()
+        self.assertEqual(self.store.get()["auto_read"]["speed"], "fast")
+        self.assertEqual(self.ui.auto_read_speed.get(), "Fast")
+        self.ui.on_auto_read_speed_changed = lambda _speed: (_ for _ in ()).throw(PermissionError("locked"))
+        self.ui.auto_read_speed.set("Normal")
+        self.ui._auto_read_speed_changed()
+        self.assertEqual(self.ui.auto_read_speed.get(), "Fast")
+        self.assertIn("could not be saved", self.ui.status_value.get())
     def test_context_rule_workflows_cancel_and_duplicate_editing(self):
         text = "bock bock"
         self.select(text, 5, 9)

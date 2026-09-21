@@ -2,12 +2,14 @@
 
 import time
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image
 
-from auto_read import AutoReadWatcher, DialogueGate, ForegroundWindow
-from config import validate_config
+from auto_read import AUTO_READ_POLICIES, AutoReadWatcher, DialogueGate, ForegroundWindow
+from config import ConfigStore, validate_config
 from capture_pipeline import CaptureWorker
 from capture_pipeline import CaptureJob, PipelineTimings
 from main import GameTextReaderApplication
@@ -46,7 +48,20 @@ class DialogueGateTests(unittest.TestCase):
         self.assertTrue(gate.accept("A different line."))
 
     def test_old_configuration_has_no_auto_shortcut(self):
-        self.assertEqual(validate_config({"hotkeys": {"fixed": "Alt+Z"}})["hotkeys"]["auto_read"], "")
+        validated = validate_config({"hotkeys": {"fixed": "Alt+Z"}})
+        self.assertEqual(validated["hotkeys"]["auto_read"], "")
+        self.assertEqual(validated["auto_read"]["speed"], "normal")
+
+    def test_speed_validation_and_persistence(self):
+        self.assertEqual(validate_config({"auto_read": {"speed": "FAST"}})["auto_read"]["speed"], "fast")
+        self.assertEqual(validate_config({"auto_read": {"speed": "unsafe"}})["auto_read"]["speed"], "normal")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            store = ConfigStore(path)
+            store.load()
+            store.update(auto_read={"speed": "fast"})
+            reloaded = ConfigStore(path)
+            self.assertEqual(reloaded.load()["auto_read"]["speed"], "fast")
 
     def test_auto_shortcut_uses_fourth_callback_and_cannot_duplicate_another_key(self):
         called = []
@@ -60,6 +75,29 @@ class DialogueGateTests(unittest.TestCase):
 
 
 class WatcherTests(unittest.TestCase):
+    def test_fast_policy_becomes_due_before_normal_without_skipping_confirmation(self):
+        fast = AUTO_READ_POLICIES["fast"]
+        normal = AUTO_READ_POLICIES["normal"]
+        self.assertTrue(AutoReadWatcher._scan_due(0.20, 1, 0.0, 0.0, -1, 0, fast))
+        self.assertFalse(AutoReadWatcher._scan_due(0.20, 1, 0.0, 0.0, -1, 0, normal))
+        self.assertEqual(DialogueGate().confirmations, 0)
+        gate = DialogueGate()
+        self.assertFalse(gate.accept("A complete line."))
+        self.assertTrue(gate.accept("A complete line."))
+
+    def test_switching_speed_keeps_active_game_and_dialogue_history(self):
+        states = []
+        watcher = AutoReadWatcher(lambda _: None, lambda *_: True, lambda *args: states.append(args))
+        watcher.active = True
+        watcher.profile = "Persona"
+        watcher.target = GAME
+        watcher.gate.remember_manual("Already spoken")
+        watcher.set_speed("fast")
+        self.assertEqual(watcher.speed, "fast")
+        self.assertEqual(watcher.target, GAME)
+        self.assertEqual(watcher.gate.last_spoken, "already spoken")
+        self.assertIn("Fast mode", states[-1][1])
+
     def test_arm_bind_pause_resume_and_stop_rejects_stale_ocr(self):
         foreground = [None]
         states = []
@@ -108,6 +146,31 @@ class WatcherTests(unittest.TestCase):
             watcher.note_error(7, 0, "OCR failed")
         self.assertLess(time.monotonic() - started, 0.5)
         self.assertFalse(watcher.active)
+
+    def test_pending_ocr_prevents_additional_screenshots(self):
+        foreground = [GAME]
+        captures = []
+        submitted = []
+        watcher = AutoReadWatcher(
+            capture=lambda _box: captures.append(time.monotonic()) or Image.new("RGB", (20, 20), "white"),
+            submit=lambda *_args: submitted.append(True) or True,
+            on_state=lambda *_args: None,
+            foreground=lambda: foreground[0],
+            exists=lambda _target: True,
+            speed="fast",
+            interval=0.01,
+        )
+        try:
+            watcher.start(BOX, "Default")
+            deadline = time.monotonic() + 1.5
+            while not submitted and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(submitted)
+            count = len(captures)
+            time.sleep(0.08)
+            self.assertEqual(len(captures), count)
+        finally:
+            watcher.stop(notify=False)
 
 
 class PipelineTests(unittest.TestCase):

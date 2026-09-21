@@ -18,6 +18,23 @@ from PIL import ImageChops, ImageStat
 
 
 @dataclass(frozen=True)
+class AutoReadPolicy:
+    """Bounded timing profile for one Auto-Read speed."""
+
+    speed: str
+    poll_interval: float
+    settle_delay: float
+    confirmation_interval: float
+    idle_rescan_interval: float
+
+
+AUTO_READ_POLICIES = {
+    "normal": AutoReadPolicy("normal", 0.35, 0.50, 0.40, 2.0),
+    "fast": AutoReadPolicy("fast", 0.12, 0.18, 0.12, 1.0),
+}
+
+
+@dataclass(frozen=True)
 class ForegroundWindow:
     handle: int
     process_id: int
@@ -122,7 +139,8 @@ class AutoReadWatcher:
         exists: Callable[[ForegroundWindow], bool] = window_exists,
         area_valid: Callable[[tuple[int, int, int, int]], bool] | None = None,
         *,
-        interval: float = 0.35,
+        speed: str = "normal",
+        interval: float | None = None,
     ) -> None:
         self.capture = capture
         self.submit = submit
@@ -130,7 +148,10 @@ class AutoReadWatcher:
         self.foreground = foreground
         self.exists = exists
         self.area_valid = area_valid or (lambda _box: True)
-        self.interval = interval
+        if speed not in AUTO_READ_POLICIES:
+            raise ValueError(f"Unknown Auto-Read speed: {speed!r}")
+        self._speed = speed
+        self._interval_override = interval
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -148,6 +169,47 @@ class AutoReadWatcher:
         self._last_scan_revision = -1
         self._errors = 0
         self._retry_after = 0.0
+
+    @property
+    def speed(self) -> str:
+        with self._lock:
+            return self._speed
+
+    @property
+    def policy(self) -> AutoReadPolicy:
+        with self._lock:
+            policy = AUTO_READ_POLICIES[self._speed]
+            if self._interval_override is None:
+                return policy
+            return AutoReadPolicy(
+                policy.speed,
+                max(0.001, float(self._interval_override)),
+                policy.settle_delay,
+                policy.confirmation_interval,
+                policy.idle_rescan_interval,
+            )
+
+    def set_speed(self, speed: str) -> None:
+        """Apply a saved timing profile without stopping or rebinding the game."""
+        normalised = str(speed).strip().lower()
+        if normalised not in AUTO_READ_POLICIES:
+            raise ValueError(f"Unknown Auto-Read speed: {speed!r}")
+        with self._lock:
+            if normalised == self._speed:
+                return
+            self._speed = normalised
+            self._last_change = time.monotonic()
+            self._last_scan_revision = -1
+            active = self.active
+            profile = self.profile
+            target = self.target
+        if active:
+            label = normalised.title()
+            if target is None:
+                message = f"Auto-Read armed for {profile} ({label} mode); return to the game within 30 seconds."
+            else:
+                message = f"Auto-reading {profile} in {target.title} ({label} mode)."
+            self.on_state(True, message, False)
 
     def start(self, box: list[int], profile: str) -> None:
         self.stop(notify=False)
@@ -168,7 +230,8 @@ class AutoReadWatcher:
             self._retry_after = 0.0
             session = self.session
             self._stop.clear()
-        self.on_state(True, f"Auto-Read armed for {profile}; return to the game within 30 seconds.", False)
+        label = self.speed.title()
+        self.on_state(True, f"Auto-Read armed for {profile} ({label} mode); return to the game within 30 seconds.", False)
         self._thread = threading.Thread(
             target=self._run, args=(session,), name="auto-read-watcher", daemon=True
         )
@@ -232,17 +295,39 @@ class AutoReadWatcher:
     def _fingerprint(image: Any) -> Any:
         return image.convert("L").resize((64, 32))
 
+    @staticmethod
+    def _scan_due(
+        now: float,
+        revision: int,
+        last_change: float,
+        last_ocr: float,
+        last_scan_revision: int,
+        confirmations: int,
+        policy: AutoReadPolicy,
+    ) -> bool:
+        if now - last_ocr < policy.confirmation_interval:
+            return False
+        quiet_candidate = (
+            now - last_change >= policy.settle_delay
+            and (revision != last_scan_revision or confirmations < 2)
+        )
+        return quiet_candidate or now - last_ocr >= policy.idle_rescan_interval
+
     def _run(self, session: int) -> None:
         armed_until = time.monotonic() + 30.0
         next_area_check = 0.0
         paused = False
-        while not self._stop.wait(self.interval):
+        while True:
+            policy = self.policy
+            if self._stop.wait(policy.poll_interval):
+                return
             with self._lock:
                 if not self.active or session != self.session:
                     return
                 box = self.box
                 target = self.target
                 retry_after = self._retry_after
+                pending = self.pending
             if time.monotonic() < retry_after:
                 continue
             if time.monotonic() >= next_area_check:
@@ -261,7 +346,7 @@ class AutoReadWatcher:
                         if session != self.session:
                             return
                         self.target = current
-                    self.on_state(True, f"Auto-reading {self.profile} in {current.title}.", False)
+                    self.on_state(True, f"Auto-reading {self.profile} in {current.title} ({self.speed.title()} mode).", False)
                 elif time.monotonic() >= armed_until:
                     self.stop("Auto-Read was not started: no game covered the saved box within 30 seconds.")
                     return
@@ -279,8 +364,10 @@ class AutoReadWatcher:
                 self.stop("Auto-Read stopped because the game no longer covers the saved box.")
                 return
             elif paused:
-                self.on_state(True, f"Auto-reading {self.profile} in {target.title}.", False)
+                self.on_state(True, f"Auto-reading {self.profile} in {target.title} ({self.speed.title()} mode).", False)
                 paused = False
+            if pending:
+                continue
             try:
                 image = self.capture(list(box))
                 fingerprint = self._fingerprint(image)
@@ -298,15 +385,17 @@ class AutoReadWatcher:
                     self._last_change = now
                     self._last_image = fingerprint
                 revision = self.revision
-                minimum_gap = 0.75 if now - self._last_change < 0.5 else 0.4
-                if self.pending or now - self._last_ocr < minimum_gap:
+                policy = self.policy
+                if self.pending:
                     continue
-                # A quiet image gets its first OCR after 500ms. Confirmations
-                # and a 2s fallback check still run when the pixels do not move.
-                due = (
-                    (now - self._last_change >= 0.5 and
-                     (revision != self._last_scan_revision or self.gate.confirmations < 2))
-                    or now - self._last_ocr >= 2.0
+                due = self._scan_due(
+                    now,
+                    revision,
+                    self._last_change,
+                    self._last_ocr,
+                    self._last_scan_revision,
+                    self.gate.confirmations,
+                    policy,
                 )
                 if not due:
                     continue
@@ -324,4 +413,12 @@ class AutoReadWatcher:
                         self.pending = False
 
 
-__all__ = ["AutoReadWatcher", "DialogueGate", "ForegroundWindow", "foreground_window", "normalize_dialogue"]
+__all__ = [
+    "AUTO_READ_POLICIES",
+    "AutoReadPolicy",
+    "AutoReadWatcher",
+    "DialogueGate",
+    "ForegroundWindow",
+    "foreground_window",
+    "normalize_dialogue",
+]
