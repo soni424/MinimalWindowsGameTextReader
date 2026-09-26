@@ -1,6 +1,15 @@
-# Game Text Reader 1.2.4-dev
+# Game Text Reader 1.2.5-dev
 
 Development build for testing before a stable release.
+
+## Reader playback controls
+
+- Added Previous sentence, Play/Pause, and Next sentence beside Last captured text. Play starts the passage when idle; Read Again still restarts it.
+- Sentence boundaries follow spoken punctuation, headings, and bullet pauses. Wrapped OCR lines remain continuous.
+- Pausing keeps the current stream and highlight, including during sentence jumps. Playback timeouts account for time spent paused.
+- Controls target only the reading tied to the displayed text. Voices without usable word timing can be paused but cannot skip sentences.
+
+## Previous development build: 1.2.4-dev
 
 ## Guarded Instant Auto-Read
 

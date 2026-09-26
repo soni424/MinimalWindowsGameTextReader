@@ -116,15 +116,26 @@ class SilentSession:
         self.finished = False
         self.closed = False
         self.can_seek = True
+        self.paused = False
+        self.timing = True
     def prepare(self, _voice): pass
     def start(self, request, started, replace=False):
         self.requests.append(request)
         self.finished = False
+        self.paused = False
         started()
-    def poll(self): return self.finished
-    def seek(self, offset):
-        self.seeks.append(offset)
+    def poll(self): return self.finished and not self.paused
+    def seek(self, offset, *, keep_paused=False):
+        self.seeks.append((offset, keep_paused))
+        self.paused = keep_paused
         return self.can_seek
+    def pause(self):
+        self.paused = True
+        return True
+    def resume(self):
+        self.paused = False
+        return True
+    def has_word_timing(self): return self.timing
     def drain_word_events(self):
         events, self.events = self.events, []
         return events
@@ -156,7 +167,7 @@ class SeekTests(unittest.TestCase):
             revision = self.engine.seek_to_source(ticket.request_id, self.doc.source_text, word.source_start)
             self.assertIsNotNone(revision)
             self.assertTrue(eventually(lambda: self.started[-1][0] == revision.request_id))
-            self.assertEqual(self.sessions[0].seeks[-1], len(self.doc.spoken_text[:word.spoken_start].encode("utf-16-le")) // 2)
+            self.assertEqual(self.sessions[0].seeks[-1][0], len(self.doc.spoken_text[:word.spoken_start].encode("utf-16-le")) // 2)
             self.assertEqual(len(self.sessions[0].requests), 1)
             self.assertEqual(self.engine._current_request.volume, 0)
             self.assertEqual(self.engine._current_request.rate, 3)
@@ -207,6 +218,90 @@ class SeekTests(unittest.TestCase):
         self.assertIsNone(self.engine.seek_to_source(final.request_id, self.doc.source_text, 3))
 
 
+class ReaderTransportTests(unittest.TestCase):
+    def setUp(self):
+        self.sessions = []
+        self.states = []
+        def factory():
+            session = SilentSession()
+            self.sessions.append(session)
+            return session
+        self.engine = TtsEngine(session_factory=factory,
+            on_playback_state_with_id=lambda *state: self.states.append(state))
+        self.document = prepare_for_speech("First sentence. Second sentence! Third sentence?")
+
+    def tearDown(self):
+        self.engine.shutdown()
+
+    def test_reader_pauses_and_seeks_without_interrupting_other_voices(self):
+        other = self.engine.enqueue("An unrelated voice")
+        self.assertTrue(eventually(lambda: other.request_id in self.engine._active_requests))
+        queued = self.engine.enqueue("A queued voice")
+        self.assertTrue(eventually(lambda: self.engine._pending_request is not None))
+        reader = self.engine.play_reader(self.document)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        self.assertEqual(len(self.sessions), 2)
+        self.assertTrue(self.engine.pause_request(reader.request_id, self.document.source_text))
+        self.assertTrue(eventually(lambda: self.sessions[1].paused))
+        self.assertFalse(self.sessions[0].paused)
+        second = self.document.sentences[1].source_start
+        revision = self.engine.navigate_reader(reader.request_id, self.document.source_text, second)
+        self.assertIsNotNone(revision)
+        self.assertTrue(eventually(lambda: revision.request_id in self.engine._active_requests))
+        self.assertTrue(self.sessions[1].seeks[-1][1])
+        self.assertTrue(self.sessions[1].paused)
+        self.assertIn(other.request_id, self.engine._active_requests)
+        self.assertEqual(self.engine._pending_request.request_id, queued.request_id)
+        self.assertTrue(self.engine.resume_request(revision.request_id, self.document.source_text))
+        self.assertTrue(eventually(lambda: not self.sessions[1].paused))
+
+    def test_paused_fallback_waits_to_synthesize_until_resume(self):
+        reader = self.engine.play_reader(self.document)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        session = self.sessions[0]
+        session.can_seek = False
+        self.assertTrue(self.engine.pause_request(reader.request_id, self.document.source_text))
+        self.assertTrue(eventually(lambda: session.paused))
+        target = self.document.sentences[2].source_start
+        revision = self.engine.navigate_reader(reader.request_id, self.document.source_text, target)
+        self.assertTrue(eventually(lambda: revision.request_id in self.engine._active_requests))
+        self.assertEqual(len(session.requests), 1)
+        self.assertTrue(self.engine.resume_request(revision.request_id, self.document.source_text))
+        self.assertTrue(eventually(lambda: len(session.requests) == 2))
+        self.assertEqual(session.requests[-1].text, "Third sentence?")
+
+    def test_missing_timing_disables_sentence_navigation_but_allows_pause(self):
+        reader = self.engine.play_reader(self.document)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        self.assertTrue(self.states[-1][3])
+        self.sessions[0].timing = False
+        self.engine._active_requests[reader.request_id].can_navigate = False
+        self.assertIsNone(self.engine.navigate_reader(reader.request_id, self.document.source_text,
+                                                      self.document.sentences[1].source_start))
+        self.assertTrue(self.engine.pause_request(reader.request_id, self.document.source_text))
+
+    def test_existing_double_click_seek_still_works_for_reader_playback(self):
+        reader = self.engine.play_reader(self.document)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        target = self.document.words[-1].source_start
+        revision = self.engine.seek_to_source(reader.request_id, self.document.source_text, target)
+        self.assertIsNotNone(revision)
+        self.assertTrue(eventually(lambda: revision.request_id in self.engine._active_requests))
+        self.assertEqual(len(self.sessions[0].requests), 1)
+
+    def test_edit_cancels_new_seek_revision_even_with_previous_request_id(self):
+        unrelated = self.engine.enqueue("Other voice")
+        self.assertTrue(eventually(lambda: unrelated.request_id in self.engine._active_requests))
+        reader = self.engine.play_reader(self.document)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        revision = self.engine.navigate_reader(reader.request_id, self.document.source_text,
+                                               self.document.sentences[1].source_start)
+        self.assertTrue(eventually(lambda: revision.request_id in self.engine._active_requests))
+        self.assertTrue(self.engine.cancel_request(reader.request_id))
+        self.assertTrue(revision.wait(1))
+        self.assertIn(unrelated.request_id, self.engine._active_requests)
+
+
 class ReaderUiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -225,6 +320,35 @@ class ReaderUiTests(unittest.TestCase):
     def select(self, text, start, end):
         self.ui.set_last_text(text)
         self.ui.captured_text.tag_add("sel", f"1.0 + {start} chars", f"1.0 + {end} chars")
+    def test_reader_transport_tracks_sentence_and_pause_state(self):
+        source = "First wrapped\nline. Second sentence!"
+        commands = []
+        self.ui.on_reader_play_pause = lambda *args: commands.append(("play", *args))
+        self.ui.on_reader_navigate = lambda *args: commands.append(("seek", *args))
+        self.ui.set_last_text(source)
+        self.ui._reader_play_pause()
+        self.assertEqual(commands[-1], ("play", None, source, False))
+        self.ui.begin_speech_progress(8, source)
+        self.ui.set_reader_playback_state(8, source, False, True)
+        self.assertEqual(self.ui.play_pause_button.cget("text"), "Pause")
+        self.assertEqual(str(self.ui.next_sentence_button.cget("state")), "normal")
+        self.ui._navigate_sentence(1)
+        self.assertEqual(commands[-1], ("seek", 8, source, source.index("Second")))
+        self.ui.show_speech_progress(8, source, source.index("Second"), source.index("Second") + 6)
+        self.assertEqual(str(self.ui.previous_sentence_button.cget("state")), "normal")
+        self.assertEqual(str(self.ui.next_sentence_button.cget("state")), "disabled")
+        self.ui.set_reader_playback_state(8, source, True, True)
+        self.ui._reader_play_pause()
+        self.assertEqual(commands[-1], ("play", 8, source, True))
+        self.ui.set_reader_playback_state(8, source, True, False)
+        self.assertEqual(str(self.ui.previous_sentence_button.cget("state")), "disabled")
+        self.assertIn("no word timing", self.ui.reader_transport_hint.get())
+        self.ui.clear_speech_progress(8)
+        self.assertEqual(self.ui.play_pause_button.cget("text"), "Play")
+        self.ui._reflow_reader_actions(700)
+        self.assertEqual(int(self.ui._reader_trailing_actions.grid_info()["row"]), 1)
+        self.ui._reflow_reader_actions(1200)
+        self.assertEqual(int(self.ui._reader_trailing_actions.grid_info()["row"]), 0)
     def test_auto_read_speed_selector_saves_and_rolls_back_on_failure(self):
         def save_speed(speed):
             return self.store.update(auto_read={"speed": speed})["auto_read"]["speed"]
@@ -336,6 +460,45 @@ class ModifierTests(unittest.TestCase):
 
 
 class NativeSeekTests(unittest.TestCase):
+    def test_native_reader_pause_resume_preserves_stream_and_watchdog(self):
+        voices = TtsEngine.list_voices()
+        source = ("First we investigate the classroom and look for clues. "
+                  "Next we follow the corridor toward another room. "
+                  "Finally we return to discuss the evidence we found.")
+        for backend in ("winrt", "sapi"):
+            voice = next((item for item in voices if item.engine == backend), None)
+            self.assertIsNotNone(voice)
+            sessions, states, errors = [], [], []
+            class CheckedSession(_WindowsSpeechSession):
+                def __init__(self):
+                    super().__init__()
+                    sessions.append(self)
+            engine = TtsEngine(session_factory=CheckedSession,
+                on_playback_state_with_id=lambda *state: states.append(state), on_error=errors.append)
+            try:
+                ticket = engine.play_reader(prepare_for_speech(source), voice.identifier, 0, 0)
+                self.assertTrue(eventually(lambda: states and states[-1][0] == ticket.request_id, 15), errors)
+                self.assertTrue(states[-1][3], f"{backend}: no native word timing")
+                self.assertTrue(engine.pause_request(ticket.request_id, source))
+                self.assertTrue(eventually(lambda: states[-1][2], 3), errors)
+                channel = sessions[0]._winrt_current_channel
+                self.assertTrue(eventually(lambda: channel.player.playback_session.can_seek, 3))
+                target = prepare_for_speech(source).sentences[1].source_start
+                revision = engine.navigate_reader(ticket.request_id, source, target)
+                self.assertIsNotNone(revision)
+                self.assertTrue(eventually(lambda: states[-1][0] == revision.request_id, 3), errors)
+                self.assertTrue(states[-1][2])
+                self.assertIs(channel, sessions[0]._winrt_current_channel)
+                deadline = sessions[0]._winrt_deadline
+                time.sleep(0.15)
+                self.assertFalse(revision.is_set())
+                self.assertTrue(engine.resume_request(revision.request_id, source))
+                self.assertTrue(eventually(lambda: not states[-1][2], 3), errors)
+                self.assertGreater(sessions[0]._winrt_deadline, deadline + 0.10)
+                self.assertFalse(errors)
+            finally:
+                engine.shutdown()
+
     def test_repeated_voice_discovery_keeps_winrt_runtime_alive(self):
         from winrt.windows.media.speechsynthesis import SpeechSynthesizer
         for _ in range(3):

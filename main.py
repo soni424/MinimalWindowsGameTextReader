@@ -102,6 +102,7 @@ class GameTextReaderApplication:
             on_finished_with_id=self._speech_finished,
             on_document_started_with_id=self._speech_document_started,
             on_word_with_id=self._speech_word,
+            on_playback_state_with_id=self._speech_playback_state,
             initial_voice_id=settings["voice"],
             initial_capture_mode=settings.get("speech", {}).get("capture_mode", "replace"),
             initial_max_overlap=settings.get("speech", {}).get("max_overlap", 2),
@@ -154,6 +155,9 @@ class GameTextReaderApplication:
             on_startup_changed=self.set_launch_at_startup,
             on_import_settings=self.import_older_settings,
             on_seek=self.seek_reader,
+            on_reader_play_pause=self.reader_play_pause,
+            on_reader_navigate=self.navigate_reader_sentence,
+            on_reader_invalidated=self.invalidate_reader_playback,
             on_review_result=self.accept_reviewed_result,
             on_profile_create=self.create_capture_profile,
             on_profile_rename=self.rename_capture_profile,
@@ -314,6 +318,13 @@ class GameTextReaderApplication:
                 request_id, source_text, source_start, source_end
             )
         )
+
+    def _speech_playback_state(
+        self, request_id: int, source_text: str, paused: bool, can_navigate: bool,
+    ) -> None:
+        self._schedule(lambda: self.ui.set_reader_playback_state(
+            request_id, source_text, paused, can_navigate
+        ))
 
     def _apply_initial_hotkeys(self) -> None:
         settings = self.config.get()
@@ -591,6 +602,31 @@ class GameTextReaderApplication:
         replace = getattr(self.tts, "replace", None) or self.tts.speak
         replace(document, settings["voice"], settings["rate"], settings["volume"])
         self.ui.set_status("Reading the last captured text again.")
+
+    def reader_play_pause(self, request_id: int | None, source_text: str, paused: bool) -> None:
+        if source_text != self.text_state.last_successful_text:
+            return
+        if request_id is not None:
+            operation = self.tts.resume_request if paused else self.tts.pause_request
+            if operation(request_id, source_text):
+                return
+            self.ui.clear_speech_progress(request_id)
+        document = prepare_for_speech(source_text)
+        if not document.spoken_text:
+            return
+        settings = self.config.get()
+        self.tts.play_reader(document, settings["voice"], settings["rate"], settings["volume"])
+        self.ui.set_status("Reading the text in Last captured text.")
+
+    def navigate_reader_sentence(self, request_id: int, source_text: str, source_offset: int) -> None:
+        if source_text != self.text_state.last_successful_text:
+            return
+        ticket = self.tts.navigate_reader(request_id, source_text, source_offset)
+        if ticket is not None:
+            self.ui.set_status("Moving to the selected sentence.")
+
+    def invalidate_reader_playback(self, request_id: int) -> None:
+        self.tts.cancel_request(request_id)
 
     def seek_reader(self, request_id: int, source_text: str, source_offset: int) -> None:
         if source_text != self.text_state.last_successful_text:

@@ -108,6 +108,9 @@ class _SpeechRequest:
     source_text: str = ""
     word_spans: tuple[SpeechWordSpan, ...] = ()
     native_offsets: tuple[int, ...] = ()
+    paused: bool = False
+    deferred_start: bool = False
+    can_navigate: bool = False
 
 
 class _SapiWordEventSink:
@@ -205,6 +208,7 @@ class _WindowsSpeechSession:
         self._selected_winrt_voice = ""
         self._active_backend = ""
         self._winrt_deadline = 0.0
+        self._paused_at = 0.0
         self._sapi_word_timings: tuple[_WordTiming, ...] = ()
 
     def prepare(self, voice_id: str) -> None:
@@ -255,6 +259,8 @@ class _WindowsSpeechSession:
         if channel.finished.is_set():
             self._retire_current_channel()
             return True
+        if self._paused_at:
+            return False
         # The event is normally delivered by MediaPlayer. This deadline is a
         # defensive fallback for projections that miss media_ended.
         if self._winrt_deadline and time.monotonic() >= self._winrt_deadline:
@@ -272,6 +278,32 @@ class _WindowsSpeechSession:
         self._retire_current_channel()
         self._active_backend = ""
         self._winrt_deadline = 0.0
+        self._paused_at = 0.0
+
+    def pause(self) -> bool:
+        channel = self._winrt_current_channel
+        if channel is None or channel.finished.is_set() or channel.failed.is_set():
+            return False
+        if not self._paused_at:
+            channel.player.pause()
+            self._paused_at = time.monotonic()
+        return True
+
+    def resume(self) -> bool:
+        channel = self._winrt_current_channel
+        if channel is None or channel.finished.is_set() or channel.failed.is_set():
+            return False
+        if self._paused_at:
+            elapsed = time.monotonic() - self._paused_at
+            if self._winrt_deadline:
+                self._winrt_deadline += elapsed
+            self._paused_at = 0.0
+            channel.player.play()
+        return True
+
+    def has_word_timing(self) -> bool:
+        channel = self._winrt_current_channel
+        return bool(channel is not None and channel.word_timings)
 
     @staticmethod
     def _close_stream(stream: object | None) -> None:
@@ -342,6 +374,7 @@ class _WindowsSpeechSession:
             self._winrt_player = None
         self._retire_channel(channel)
         self._winrt_deadline = 0.0
+        self._paused_at = 0.0
 
     def _new_playback_channel(self) -> _PlaybackChannel:
         try:
@@ -600,6 +633,7 @@ class _WindowsSpeechSession:
             raise
         self._active_backend = "winrt"
         self._winrt_deadline = time.monotonic() + max(0.75, duration_seconds + 1.0)
+        self._paused_at = 0.0
         on_started()
 
     @staticmethod
@@ -630,7 +664,7 @@ class _WindowsSpeechSession:
         except Exception:
             return ()
 
-    def seek(self, spoken_offset: int) -> bool:
+    def seek(self, spoken_offset: int, *, keep_paused: bool = False) -> bool:
         """Seek on the owning worker without replacing the synthesized stream."""
         channel = self._winrt_current_channel
         if channel is None or channel.finished.is_set() or channel.failed.is_set():
@@ -648,13 +682,19 @@ class _WindowsSpeechSession:
         channel.next_word_timing = timing_index
         duration = playback.natural_duration.total_seconds()
         self._winrt_deadline = time.monotonic() + max(1.0, duration - target + 2.0)
-        channel.player.play()
+        if keep_paused:
+            self._paused_at = time.monotonic()
+        else:
+            self._paused_at = 0.0
+            channel.player.play()
         return True
 
     def drain_word_events(self) -> tuple[tuple[int, int], ...]:
         """Return the newest word crossed by the active playback position."""
 
         channel = self._winrt_current_channel
+        if self._paused_at:
+            return ()
         if channel is None or not channel.word_timings:
             return ()
         try:
@@ -772,6 +812,7 @@ class TtsEngine:
         on_finished_with_id: Callable[[int, str], None] | None = None,
         on_document_started_with_id: Callable[[int, str], None] | None = None,
         on_word_with_id: Callable[[int, str, int, int], None] | None = None,
+        on_playback_state_with_id: Callable[[int, str, bool, bool], None] | None = None,
         initial_voice_id: str = "",
         initial_capture_mode: str = DEFAULT_CAPTURE_MODE,
         initial_max_overlap: int = DEFAULT_MAX_OVERLAP,
@@ -784,7 +825,9 @@ class TtsEngine:
         self._on_finished_with_id = on_finished_with_id
         self._on_document_started_with_id = on_document_started_with_id
         self._on_word_with_id = on_word_with_id
+        self._on_playback_state_with_id = on_playback_state_with_id
         self._latest_seek_id = 0
+        self._latest_reader_seek_id = 0
         self._discard_before_id = 0
         self._seek_aliases: dict[int, int] = {}
         self._initial_voice_id = initial_voice_id
@@ -955,7 +998,7 @@ class TtsEngine:
             voice_id=str(voice_id or ""),
             rate=max(-10, min(10, int(rate))),
             volume=max(0, min(100, int(volume))),
-            mode=_normalise_mode(mode),
+            mode="reader" if mode == "reader" else _normalise_mode(mode),
             generation=generation,
             completion=done,
             source_text=source_text,
@@ -1012,6 +1055,12 @@ class TtsEngine:
         volume: int = 100,
     ) -> SpeechTicket:
         return self._submit(text, voice_id, rate, volume, mode="overlap")
+
+    def play_reader(
+        self, text: SpeechDocument, voice_id: str = "", rate: int = 0, volume: int = 100,
+    ) -> SpeechTicket:
+        """Start a reader-owned channel without replacing unrelated speech."""
+        return self._submit(text, voice_id, rate, volume, mode="reader")
 
     def speak_mode(
         self,
@@ -1074,6 +1123,53 @@ class TtsEngine:
         self._put_command(_SpeechCommand('seek', request, target_id=request_id, source_offset=source_offset))
         return ticket
 
+    def _matching_active(self, request_id: int, source_text: str) -> _SpeechRequest | None:
+        with self._current_lock:
+            for _ in range(128):
+                if request_id not in self._seek_aliases:
+                    break
+                request_id = self._seek_aliases[request_id]
+            request = self._active_requests.get(request_id)
+            if request is None or request.cancel.is_set() or request.source_text != source_text:
+                return None
+            return request
+
+    def pause_request(self, request_id: int, source_text: str) -> bool:
+        request = self._matching_active(request_id, source_text)
+        if request is None or request.paused:
+            return False
+        self._put_command(_SpeechCommand("pause", target_id=request.request_id))
+        return True
+
+    def resume_request(self, request_id: int, source_text: str) -> bool:
+        request = self._matching_active(request_id, source_text)
+        if request is None or not request.paused:
+            return False
+        self._put_command(_SpeechCommand("resume", target_id=request.request_id))
+        return True
+
+    def navigate_reader(self, request_id: int, source_text: str, source_offset: int) -> SpeechTicket | None:
+        """Seek one mapped reading while leaving other voices and queue entries intact."""
+        request = self._matching_active(request_id, source_text)
+        if request is None or not request.can_navigate:
+            return None
+        document = prepare_for_speech(source_text)
+        if not any(word.source_start == source_offset for word in document.words):
+            return None
+        with self._current_lock:
+            self._next_request_id += 1
+            identifier = self._next_request_id
+            self._latest_reader_seek_id = identifier
+            ticket = SpeechTicket(identifier)
+            sought = _SpeechRequest(identifier, request.text, request.voice_id, request.rate,
+                                    request.volume, mode=request.mode, generation=request.generation,
+                                    completion=ticket, source_text=source_text,
+                                    word_spans=request.word_spans, native_offsets=request.native_offsets,
+                                    paused=request.paused, can_navigate=True)
+        self._put_command(_SpeechCommand("reader_seek", sought, target_id=request.request_id,
+                                         source_offset=source_offset))
+        return ticket
+
     def cancel_request(self, request_id: int) -> bool:
         """Cancel one active or waiting request without disturbing other speech."""
         try:
@@ -1083,6 +1179,10 @@ class TtsEngine:
         if target_id <= 0 or self._shutdown.is_set():
             return False
         with self._current_lock:
+            for _ in range(128):
+                if target_id not in self._seek_aliases:
+                    break
+                target_id = self._seek_aliases[target_id]
             request = self._active_requests.get(target_id)
             if request is None and self._pending_request is not None:
                 if self._pending_request.request_id == target_id:
@@ -1203,6 +1303,20 @@ class TtsEngine:
                 self._on_document_started_with_id(
                     request.request_id, request.source_text
                 )
+            except Exception:
+                pass
+
+    def _notify_playback_state(self, request: _SpeechRequest, session: object) -> None:
+        timing = getattr(session, "has_word_timing", None)
+        if callable(timing):
+            try:
+                request.can_navigate = request.can_navigate or bool(timing())
+            except Exception:
+                pass
+        if self._on_playback_state_with_id is not None and request.source_text:
+            try:
+                self._on_playback_state_with_id(request.request_id, request.source_text,
+                                                request.paused, request.can_navigate)
             except Exception:
                 pass
 
@@ -1329,6 +1443,7 @@ class TtsEngine:
             self._finish_request(request)
             self._set_active(None)
             return None
+        self._notify_playback_state(request, session)
         # A blocking compatibility session is already complete.
         if not self._supports_nonblocking(session) or type(self)._play is not TtsEngine._play:
             self._finish_request(request)
@@ -1355,6 +1470,7 @@ class TtsEngine:
             self._unregister_overlap(request)
             self._finish_request(request)
             return None
+        self._notify_playback_state(request, session)
         if not self._supports_nonblocking(session):
             self._unregister_overlap(request)
             self._finish_request(request)
@@ -1419,12 +1535,13 @@ class TtsEngine:
             pending: _SpeechRequest | None = None
             overlap_active: dict[int, tuple[_SpeechRequest, _SpeechSession]] = {}
             overlap_pending: deque[_SpeechRequest] = deque()
+            reader_active: dict[int, tuple[_SpeechRequest, _SpeechSession]] = {}
             mode = self.capture_mode
             max_overlap = self.max_overlap
             while True:
                 received = False
                 command: _SpeechCommand | None = None
-                busy = active is not None or bool(overlap_active)
+                busy = active is not None or bool(overlap_active) or bool(reader_active)
                 try:
                     command = self._requests.get(timeout=0.02 if busy else None)
                     received = True
@@ -1438,6 +1555,8 @@ class TtsEngine:
                                 self._cancel_queued(request)
                             self._finish_active(active, stop_backend=True)
                             for request, session in list(overlap_active.values()):
+                                self._finish_overlap(request, session, stop_backend=True)
+                            for request, session in list(reader_active.values()):
                                 self._finish_overlap(request, session, stop_backend=True)
                             return
                         if command.kind == "configure":
@@ -1457,6 +1576,9 @@ class TtsEngine:
                             for request, session in list(overlap_active.values()):
                                 self._finish_overlap(request, session, stop_backend=True)
                             overlap_active.clear()
+                            for request, session in list(reader_active.values()):
+                                self._finish_overlap(request, session, stop_backend=True)
+                            reader_active.clear()
                         elif command.kind == "stop":
                             self._cancel_queued(pending)
                             pending = None
@@ -1469,6 +1591,9 @@ class TtsEngine:
                             for request, session in list(overlap_active.values()):
                                 self._finish_overlap(request, session, stop_backend=True)
                             overlap_active.clear()
+                            for request, session in list(reader_active.values()):
+                                self._finish_overlap(request, session, stop_backend=True)
+                            reader_active.clear()
                         elif command.kind == "cancel":
                             target_id = command.target_id
                             if pending is not None and pending.request_id == target_id:
@@ -1489,6 +1614,146 @@ class TtsEngine:
                             overlap = overlap_active.pop(target_id, None)
                             if overlap is not None:
                                 self._finish_overlap(*overlap, stop_backend=True)
+                            reader = reader_active.pop(target_id, None)
+                            if reader is not None:
+                                self._finish_overlap(*reader, stop_backend=True)
+                        elif command.kind in ("pause", "resume"):
+                            target_id = command.target_id
+                            if active is not None and active.request_id == target_id:
+                                target, target_session = active, self._session
+                            else:
+                                pair = overlap_active.get(target_id) or reader_active.get(target_id)
+                                target, target_session = pair if pair is not None else (None, None)
+                            if target is not None and target_session is not None:
+                                try:
+                                    if command.kind == "pause" and not target.paused:
+                                        if bool(getattr(target_session, "pause", lambda: False)()):
+                                            target.paused = True
+                                            self._notify_playback_state(target, target_session)
+                                    elif command.kind == "resume" and target.paused:
+                                        if target.deferred_start:
+                                            target.deferred_start = False
+                                            resumed_session, started = self._start_on_session(
+                                                target, target_session, replace=True)
+                                            if not started or resumed_session is None:
+                                                if active is target:
+                                                    active = None
+                                                    self._set_active(None)
+                                                else:
+                                                    overlap_active.pop(target_id, None)
+                                                    reader_active.pop(target_id, None)
+                                                    self._unregister_overlap(target)
+                                                continue
+                                            if active is target:
+                                                self._session = resumed_session
+                                            elif target_id in overlap_active:
+                                                overlap_active[target_id] = (target, resumed_session)
+                                            else:
+                                                reader_active[target_id] = (target, resumed_session)
+                                            target_session = resumed_session
+                                        elif not bool(getattr(target_session, "resume", lambda: False)()):
+                                            continue
+                                        target.paused = False
+                                        self._notify_playback_state(target, target_session)
+                                except Exception as exc:
+                                    self._report_error(target, exc)
+                        elif command.kind == "reader_seek" and command.request is not None:
+                            sought = command.request
+                            target_id = command.target_id
+                            with self._current_lock:
+                                for _ in range(128):
+                                    if target_id not in self._seek_aliases:
+                                        break
+                                    target_id = self._seek_aliases[target_id]
+                            location = "main"
+                            if active is not None and active.request_id == target_id:
+                                target, target_session = active, self._session
+                            elif target_id in reader_active:
+                                location = "reader"
+                                target, target_session = reader_active[target_id]
+                            elif target_id in overlap_active:
+                                location = "overlap"
+                                target, target_session = overlap_active[target_id]
+                            else:
+                                target, target_session = None, None
+                            if (target is None or target_session is None or target.cancel.is_set()
+                                    or sought.request_id != self._latest_reader_seek_id
+                                    or sought.generation != self._generation
+                                    or target.source_text != sought.source_text or not target.can_navigate):
+                                self._cancel_queued(sought)
+                                continue
+                            document = prepare_for_speech(sought.source_text)
+                            source_word = next((word for word in document.words
+                                                if word.source_start == command.source_offset), None)
+                            if source_word is None:
+                                self._cancel_queued(sought)
+                                continue
+                            old_word = next((word for word in target.word_spans
+                                             if word.source_start == source_word.source_start), None)
+                            moved = False
+                            if old_word is not None and callable(getattr(target_session, "seek", None)):
+                                try:
+                                    native_start = len(target.text[:old_word.spoken_start].encode("utf-16-le")) // 2
+                                    if target.paused:
+                                        moved = bool(target_session.seek(native_start, keep_paused=True))
+                                    else:
+                                        moved = bool(target_session.seek(native_start))
+                                except Exception:
+                                    moved = False
+                            self._finish_request(target)
+                            if location == "main":
+                                active = sought
+                                self._set_active(sought)
+                            else:
+                                entries = reader_active if location == "reader" else overlap_active
+                                entries.pop(target_id, None)
+                                self._unregister_overlap(target)
+                                entries[sought.request_id] = (sought, target_session)
+                                self._register_overlap(sought)
+                            with self._current_lock:
+                                self._seek_aliases[target.request_id] = sought.request_id
+                                if len(self._seek_aliases) > 128:
+                                    self._seek_aliases.pop(next(iter(self._seek_aliases)))
+                            if moved:
+                                self._notify_started(sought)
+                                self._notify_playback_state(sought, target_session)
+                                offset = old_word.spoken_start if old_word is not None else 0
+                                start = len(sought.text[:offset].encode("utf-16-le")) // 2
+                                end = len(sought.text[:old_word.spoken_end].encode("utf-16-le")) // 2
+                                self._notify_word(sought, start, end)
+                            else:
+                                try:
+                                    target_session.stop()
+                                except Exception:
+                                    pass
+                                suffix = document.from_source(source_word.source_start)
+                                sought.text = suffix.spoken_text
+                                sought.word_spans = suffix.words
+                                sought.native_offsets = native_offset_map(sought.text)
+                                if sought.paused:
+                                    sought.deferred_start = True
+                                    self._notify_playback_state(sought, target_session)
+                                    if suffix.words:
+                                        first_end = len(sought.text[:suffix.words[0].spoken_end].encode("utf-16-le")) // 2
+                                        self._notify_word(sought, 0, first_end)
+                                else:
+                                    replacement_session, started = self._start_on_session(
+                                        sought, target_session, replace=True)
+                                    if not started or replacement_session is None:
+                                        if location == "main":
+                                            active = None
+                                            self._set_active(None)
+                                        else:
+                                            entries.pop(sought.request_id, None)
+                                            self._unregister_overlap(sought)
+                                        continue
+                                    if location == "main":
+                                        self._session = replacement_session
+                                    else:
+                                        entries[sought.request_id] = (sought, replacement_session)
+                                    self._notify_playback_state(sought, replacement_session)
+                                    if suffix.words:
+                                        self._notify_word(sought, 0, len(sought.text[:suffix.words[0].spoken_end].encode("utf-16-le")) // 2)
                         elif command.kind == 'seek' and command.request is not None:
                             sought = command.request
                             target_id = command.target_id
@@ -1501,6 +1766,8 @@ class TtsEngine:
                             target_session = self._session if target else None
                             if target_id in overlap_active:
                                 target, target_session = overlap_active[target_id]
+                            if target_id in reader_active:
+                                target, target_session = reader_active[target_id]
                             if (target is None or target_session is None or target.cancel.is_set()
                                     or sought.request_id != self._latest_seek_id
                                     or sought.generation != self._generation):
@@ -1518,6 +1785,10 @@ class TtsEngine:
                                 if other is not target:
                                     self._finish_overlap(other, other_session, stop_backend=True)
                                 overlap_active.pop(old_id, None)
+                            for old_id, (other, other_session) in list(reader_active.items()):
+                                if other is not target:
+                                    self._finish_overlap(other, other_session, stop_backend=True)
+                                reader_active.pop(old_id, None)
                             self._finish_request(target)
                             if self._session is not None and self._session is not target_session:
                                 try:
@@ -1543,6 +1814,7 @@ class TtsEngine:
                                 self._unregister_overlap(target)
                                 self._set_active(sought)
                                 self._notify_started(sought)
+                                self._notify_playback_state(sought, target_session)
                             else:
                                 try:
                                     target_session.stop()
@@ -1560,6 +1832,13 @@ class TtsEngine:
                                 stale = request.generation != self._generation or request.request_id < self._discard_before_id
                             if stale or request.cancel.is_set():
                                 self._cancel_queued(request)
+                            elif request.mode == "reader":
+                                for prior, prior_session in list(reader_active.values()):
+                                    self._finish_overlap(prior, prior_session, stop_backend=True)
+                                reader_active.clear()
+                                started = self._start_overlap_request(request)
+                                if started is not None:
+                                    reader_active[request.request_id] = started
                             elif request.mode == "overlap":
                                 if len(overlap_active) < max_overlap:
                                     started = self._start_overlap_request(request)
@@ -1595,7 +1874,7 @@ class TtsEngine:
                     if active.cancel.is_set() or stale:
                         self._finish_active(active, stop_backend=True)
                         active = None
-                    elif self._session is not None and self._supports_nonblocking(self._session):
+                    elif not active.paused and self._session is not None and self._supports_nonblocking(self._session):
                         try:
                             self._drain_session_progress(active, self._session)
                             finished = bool(self._session.poll())
@@ -1613,6 +1892,8 @@ class TtsEngine:
                         self._finish_overlap(request, session, stop_backend=True)
                         overlap_active.pop(request_id, None)
                         continue
+                    if request.paused:
+                        continue
                     try:
                         self._drain_session_progress(request, session)
                         finished = bool(session.poll())
@@ -1622,6 +1903,25 @@ class TtsEngine:
                     if finished:
                         self._finish_overlap(request, session)
                         overlap_active.pop(request_id, None)
+
+                for request_id, (request, session) in list(reader_active.items()):
+                    with self._current_lock:
+                        stale = request.generation != self._generation
+                    if request.cancel.is_set() or stale:
+                        self._finish_overlap(request, session, stop_backend=True)
+                        reader_active.pop(request_id, None)
+                        continue
+                    if request.paused:
+                        continue
+                    try:
+                        self._drain_session_progress(request, session)
+                        finished = bool(session.poll())
+                    except Exception as exc:
+                        self._report_error(request, exc)
+                        finished = True
+                    if finished:
+                        self._finish_overlap(request, session)
+                        reader_active.pop(request_id, None)
 
                 while overlap_pending and len(overlap_active) < max_overlap:
                     next_request = overlap_pending.popleft()

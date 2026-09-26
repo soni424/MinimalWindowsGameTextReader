@@ -69,6 +69,25 @@ class SpeechTextTests(unittest.TestCase):
             ["One", "One", "One"],
         )
 
+    def test_sentence_navigation_uses_spoken_pauses_and_source_positions(self) -> None:
+        source = "Sentinel's Testimony\n\n1. Dr. Smith saw 3.14 clues.\n• First item!\n• Second item?"
+        document = prepare_for_speech(source)
+        self.assertEqual(
+            [source[part.source_start:part.source_end] for part in document.sentences],
+            ["Sentinel's Testimony", "Dr. Smith saw 3.14 clues", "First item", "Second item"],
+        )
+        self.assertEqual(
+            [document.spoken_text[part.spoken_start:part.spoken_end] for part in document.sentences],
+            ["Sentinel's Testimony", "Dr. Smith saw 3.14 clues", "First item", "Second item"],
+        )
+
+    def test_wrapped_line_and_unicode_stay_in_one_sentence(self) -> None:
+        source = "😀 Go across the\nclassroom. Then return!"
+        document = prepare_for_speech(source)
+        self.assertEqual(len(document.sentences), 2)
+        self.assertEqual(source[document.sentences[0].source_start:document.sentences[0].source_end],
+                         "Go across the\nclassroom")
+
 
 if __name__ == "__main__":
     unittest.main()

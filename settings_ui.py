@@ -16,6 +16,7 @@ from config import ConfigStore
 from app_version import version_label
 from hotkey_manager import HotkeyError, normalise_hotkey
 from ocr_correction import CorrectionResult
+from speech_text import prepare_for_speech
 from tts_engine import TtsEngine, Voice
 from window_state import WindowStateController
 
@@ -436,6 +437,9 @@ class SettingsUI:
         on_startup_changed: Callable[[bool], None] | None = None,
         on_import_settings: Callable[[Path], None] | None = None,
         on_seek: Callable[[int, str, int], object] | None = None,
+        on_reader_play_pause: Callable[[int | None, str, bool], None] | None = None,
+        on_reader_navigate: Callable[[int, str, int], None] | None = None,
+        on_reader_invalidated: Callable[[int], None] | None = None,
         on_review_result: Callable[[CorrectionResult], None] | None = None,
         on_profile_create: Callable[[str], None] | None = None,
         on_profile_rename: Callable[[str, str], None] | None = None,
@@ -460,6 +464,9 @@ class SettingsUI:
         self.on_startup_changed = on_startup_changed or (lambda _enabled: None)
         self.on_import_settings = on_import_settings or (lambda _folder: None)
         self.on_seek = on_seek or (lambda *_args: None)
+        self.on_reader_play_pause = on_reader_play_pause or (lambda *_args: None)
+        self.on_reader_navigate = on_reader_navigate or (lambda *_args: None)
+        self.on_reader_invalidated = on_reader_invalidated or (lambda *_args: None)
         self.on_review_result = on_review_result or (lambda _result: None)
         self.on_profile_create = on_profile_create or (lambda _name: None)
         self.on_profile_rename = on_profile_rename or (lambda _profile_id, _name: None)
@@ -530,6 +537,9 @@ class SettingsUI:
         self._last_result: CorrectionResult | None = None
         self._updating_captured_text = False
         self._speech_highlight_owner: int | None = None
+        self._reader_paused = False
+        self._reader_can_navigate = False
+        self._reader_current_offset = 0
         self._speech_highlight_high_water = 0
         self._suppressed_speech_highlights: set[int] = set()
         self._comboboxes: list[ttk.Combobox] = []
@@ -1105,12 +1115,12 @@ class SettingsUI:
         captured = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
         captured.grid(row=1, column=0, sticky="nsew")
         captured.columnconfigure(0, weight=1)
-        captured.rowconfigure(2, weight=1)
+        captured.rowconfigure(3, weight=1)
         ttk.Label(captured, text="Last captured text", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(captured, textvariable=self.capture_meta, style="CardHint.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 8))
         self.captured_text_frame = ttk.Frame(captured, style="CardInner.TFrame")
         self.captured_text_frame.grid(
-            row=2, column=0, columnspan=2, sticky="nsew"
+            row=3, column=0, columnspan=2, sticky="nsew"
         )
         self.captured_text_frame.columnconfigure(0, weight=1)
         self.captured_text_frame.rowconfigure(0, weight=1)
@@ -1140,13 +1150,45 @@ class SettingsUI:
         self.captured_text.bind('<Shift-F10>', self._reader_context_menu)
         self.captured_text.edit_modified(False)
         capture_actions = ttk.Frame(captured, style="CardInner.TFrame")
-        capture_actions.grid(row=0, column=1, rowspan=2, sticky="e")
-        self.read_again_button = ttk.Button(capture_actions, text="Read Again", style="Primary.TButton", command=self.on_read_again, state="disabled")
+        capture_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        capture_actions.columnconfigure(1, weight=1)
+        transport = ttk.Frame(capture_actions, style="CardInner.TFrame")
+        transport.grid(row=0, column=0, sticky="w")
+        self.previous_sentence_button = ttk.Button(transport, text="Previous sentence", style="Compact.TButton",
+                                                   command=lambda: self._navigate_sentence(-1), state="disabled")
+        self.previous_sentence_button.pack(side="left")
+        self.play_pause_button = ttk.Button(transport, text="Play", style="Compact.TButton",
+                                            command=self._reader_play_pause, state="disabled")
+        self.play_pause_button.pack(side="left", padx=(6, 0))
+        self.next_sentence_button = ttk.Button(transport, text="Next sentence", style="Compact.TButton",
+                                               command=lambda: self._navigate_sentence(1), state="disabled")
+        self.next_sentence_button.pack(side="left", padx=(6, 0))
+        trailing_actions = ttk.Frame(capture_actions, style="CardInner.TFrame")
+        trailing_actions.grid(row=0, column=1, sticky="e")
+        self._reader_trailing_actions = trailing_actions
+        self._reader_actions_stacked = False
+        capture_actions.bind("<Configure>", lambda event: self._reflow_reader_actions(event.width))
+        self.read_again_button = ttk.Button(trailing_actions, text="Read Again", style="Primary.TButton", command=self.on_read_again, state="disabled")
         self.read_again_button.pack(side="left", padx=(0, 6))
-        self.details_button = ttk.Button(capture_actions, text="Corrections", style="Compact.TButton", command=self.show_correction_details, state="disabled")
+        self.details_button = ttk.Button(trailing_actions, text="Corrections", style="Compact.TButton", command=self.show_correction_details, state="disabled")
         self.details_button.pack(side="left")
-        ttk.Button(capture_actions, text="Clear", style="Compact.TButton", command=self.clear_text).pack(side="left")
-        ttk.Button(capture_actions, text="Copy", style="Compact.TButton", command=self.copy_text).pack(side="left", padx=(6, 0))
+        ttk.Button(trailing_actions, text="Clear", style="Compact.TButton", command=self.clear_text).pack(side="left")
+        ttk.Button(trailing_actions, text="Copy", style="Compact.TButton", command=self.copy_text).pack(side="left", padx=(6, 0))
+        self.reader_transport_hint = tk.StringVar(value="")
+        ttk.Label(capture_actions, textvariable=self.reader_transport_hint,
+                  style="CardHint.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
+
+    def _reflow_reader_actions(self, width: int) -> None:
+        stacked = width < 880
+        if stacked == self._reader_actions_stacked:
+            return
+        self._reader_actions_stacked = stacked
+        self._reader_trailing_actions.grid_configure(
+            row=1 if stacked else 0,
+            column=0 if stacked else 1,
+            sticky="w" if stacked else "e",
+            pady=(6, 0) if stacked else (0, 0),
+        )
 
     def _build_ocr_tab(self, parent: ttk.Frame) -> None:
         automatic = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
@@ -1967,6 +2009,8 @@ class SettingsUI:
     def _replace_captured_text(self, text: str) -> None:
         """Update the editor without treating an OCR/UI refresh as a user edit."""
 
+        if self._speech_highlight_owner is not None:
+            self.on_reader_invalidated(self._speech_highlight_owner)
         self.clear_speech_progress()
         self._updating_captured_text = True
         try:
@@ -1986,6 +2030,8 @@ class SettingsUI:
         if self._updating_captured_text:
             return
 
+        if self._speech_highlight_owner is not None:
+            self.on_reader_invalidated(self._speech_highlight_owner)
         self.clear_speech_progress()
         editor_text = self.captured_text.get("1.0", "end-1c")
         text = editor_text.strip()
@@ -2019,10 +2065,74 @@ class SettingsUI:
             self._suppressed_speech_highlights.clear()
         self._speech_highlight_high_water = request_id
         self._speech_highlight_owner = request_id
+        self._reader_current_offset = 0
+        self._reader_paused = False
+        self._reader_can_navigate = False
         self.captured_text.tag_remove("speech_line", "1.0", "end")
         self.captured_text.tag_remove("speech_word", "1.0", "end")
         if self.captured_text.get("1.0", "end-1c") != source_text:
             self._speech_highlight_owner = None
+        self._update_reader_transport()
+
+    def set_reader_playback_state(
+        self, request_id: int, source_text: str, paused: bool, can_navigate: bool,
+    ) -> None:
+        if request_id < self._speech_highlight_high_water:
+            return
+        if self.captured_text.get("1.0", "end-1c") != source_text:
+            return
+        if self._speech_highlight_owner != request_id:
+            self.begin_speech_progress(request_id, source_text)
+        if self._speech_highlight_owner != request_id:
+            return
+        self._reader_paused = paused
+        self._reader_can_navigate = can_navigate
+        self.reader_transport_hint.set(
+            "Sentence skipping is unavailable for this voice because it supplies no word timing."
+            if not can_navigate else ""
+        )
+        self._update_reader_transport()
+
+    def _reader_sentence_index(self) -> tuple[int, int]:
+        source = self.captured_text.get("1.0", "end-1c")
+        sentences = prepare_for_speech(source).sentences
+        if not sentences:
+            return 0, 0
+        index = 0
+        for i, sentence in enumerate(sentences):
+            if self._reader_current_offset < sentence.source_start:
+                break
+            index = i
+            if self._reader_current_offset < sentence.source_end:
+                break
+        return index, len(sentences)
+
+    def _update_reader_transport(self) -> None:
+        if not hasattr(self, "play_pause_button"):
+            return
+        has_text = bool(self.captured_text.get("1.0", "end-1c").strip())
+        playing = self._speech_highlight_owner is not None
+        self.play_pause_button.configure(text="Play" if not playing or self._reader_paused else "Pause",
+                                         state="normal" if has_text else "disabled")
+        index, count = self._reader_sentence_index() if playing and self._reader_can_navigate else (0, 0)
+        self.previous_sentence_button.configure(state="normal" if count > 1 and index > 0 else "disabled")
+        self.next_sentence_button.configure(state="normal" if count > 1 and index + 1 < count else "disabled")
+
+    def _reader_play_pause(self) -> None:
+        source = self.captured_text.get("1.0", "end-1c")
+        if source.strip():
+            self.on_reader_play_pause(self._speech_highlight_owner, source, self._reader_paused)
+
+    def _navigate_sentence(self, direction: int) -> None:
+        request_id = self._speech_highlight_owner
+        if request_id is None or not self._reader_can_navigate:
+            return
+        source = self.captured_text.get("1.0", "end-1c")
+        sentences = prepare_for_speech(source).sentences
+        index, count = self._reader_sentence_index()
+        target = index + direction
+        if 0 <= target < count:
+            self.on_reader_navigate(request_id, source, sentences[target].source_start)
 
     def show_speech_progress(
         self,
@@ -2048,16 +2158,20 @@ class SettingsUI:
             self._suppressed_speech_highlights.clear()
         self._speech_highlight_high_water = request_id
         self._speech_highlight_owner = request_id
+        self._reader_current_offset = source_start
         word_start = self.captured_text.index(f"1.0 + {source_start} chars")
         word_end = self.captured_text.index(f"1.0 + {source_end} chars")
         line_start = self.captured_text.index(f"{word_start} display linestart")
         line_end = self.captured_text.index(f"{word_start} display lineend")
+        if self.captured_text.compare(line_start, "==", line_end):
+            line_start, line_end = word_start, word_end
         self.captured_text.tag_remove("speech_line", "1.0", "end")
         self.captured_text.tag_remove("speech_word", "1.0", "end")
         self.captured_text.tag_add("speech_line", line_start, line_end)
         self.captured_text.tag_add("speech_word", word_start, word_end)
         self.captured_text.tag_raise("speech_word", "speech_line")
         self.captured_text.see(word_start)
+        self._update_reader_transport()
 
     def clear_speech_progress(self, request_id: int | None = None) -> None:
         """Clear highlight tags without allowing an older voice to take over."""
@@ -2071,6 +2185,12 @@ class SettingsUI:
         self.captured_text.tag_remove("speech_line", "1.0", "end")
         self.captured_text.tag_remove("speech_word", "1.0", "end")
         self._speech_highlight_owner = None
+        self._reader_paused = False
+        self._reader_can_navigate = False
+        self._reader_current_offset = 0
+        if hasattr(self, "reader_transport_hint"):
+            self.reader_transport_hint.set("")
+        self._update_reader_transport()
 
     def set_last_result(self, result: CorrectionResult) -> None:
         """Show corrected text while retaining raw OCR and the change trace."""
@@ -2218,6 +2338,7 @@ class SettingsUI:
     def set_read_again_enabled(self, enabled: bool) -> None:
         if hasattr(self, "read_again_button"):
             self.read_again_button.configure(state="normal" if enabled else "disabled")
+        self._update_reader_transport()
 
     def close(self) -> None:
         """Flush debounced settings before the native window is destroyed."""
