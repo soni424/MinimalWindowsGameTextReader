@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from speech_text import format_for_speech, prepare_for_speech
+from speech_text import format_for_speech, prepare_for_speech, synthesis_input
 
 
 class SpeechTextTests(unittest.TestCase):
@@ -87,6 +87,38 @@ class SpeechTextTests(unittest.TestCase):
         self.assertEqual(len(document.sentences), 2)
         self.assertEqual(source[document.sentences[0].source_start:document.sentences[0].source_end],
                          "Go across the\nclassroom")
+
+    def test_structural_pauses_distinguish_lists_paragraphs_and_sections(self) -> None:
+        source = ("Introduction:\n\n- Parent:\n  - First detail\n  - Second detail\n"
+                  "\n---\nNext section\n\nA wrapped\nline.")
+        document = prepare_for_speech(source)
+        pauses = {source[p.source_offset:document.words[next(i for i, w in enumerate(document.words)
+                  if w.spoken_start == p.spoken_offset)].source_end]: p.milliseconds
+                  for p in document.pauses}
+        self.assertEqual(pauses["Parent"], 350)
+        self.assertEqual(pauses["First"], 350)
+        self.assertEqual(pauses["Second"], 180)
+        self.assertEqual(pauses["Next"], 700)
+        self.assertEqual(pauses["A"], 350)
+        self.assertNotIn("line", pauses)
+        self.assertNotIn("---", document.spoken_text)
+        suffix = document.from_source(source.index('Second'))
+        self.assertEqual(suffix.spoken_text[:6], 'Second')
+        self.assertTrue(any(p.milliseconds == 700 for p in suffix.pauses))
+
+    def test_markup_escapes_source_and_maps_utf16_word_offsets(self) -> None:
+        document = prepare_for_speech('😀 A & B < C\n\n- D')
+        self.assertTrue(document.pauses)
+        for backend, marker in [('winrt', '<break time='), ('sapi', '<silence msec=')]:
+            prepared = synthesis_input(document.spoken_text, document.pauses, backend)
+            self.assertIn(marker, prepared.text)
+            self.assertIn('&amp;', prepared.text)
+            self.assertIn('&lt;', prepared.text)
+            for word in document.words:
+                start = prepared.spoken_to_native[word.spoken_start]
+                end = prepared.spoken_to_native[word.spoken_end]
+                self.assertEqual(prepared.native_to_spoken[start], word.spoken_start)
+                self.assertEqual(prepared.native_to_spoken[end], word.spoken_end)
 
 
 if __name__ == "__main__":

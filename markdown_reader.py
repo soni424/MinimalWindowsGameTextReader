@@ -15,7 +15,7 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.tasklists import tasklists_plugin
 
-from speech_text import SpeechDocument, SpeechWordSpan, _sentence_spans
+from speech_text import SpeechDocument, SpeechWordSpan, _sentence_spans, structural_pauses
 
 
 _WORD = re.compile(r"\w+(?:[\-'’]\w+)*", re.UNICODE)
@@ -235,7 +235,8 @@ def prepare_markdown_for_speech(source: str) -> SpeechDocument:
         if positions:
             mapped_words.append(SpeechWordSpan(word.start(), word.end(), positions[0], positions[-1] + 1))
     words = tuple(mapped_words)
-    return SpeechDocument(source, spoken, words, _sentence_spans(spoken, words))
+    return SpeechDocument(source, spoken, words, _sentence_spans(spoken, words),
+                          structural_pauses(source, words))
 
 
 __all__ = ['RenderedMarkdown', 'looks_like_markdown', 'render_markdown', 'prepare_markdown_for_speech']

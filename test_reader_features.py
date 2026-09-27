@@ -1,19 +1,21 @@
 """Reader feature regressions, with silent speech sessions and isolated settings."""
 import json
+import io
 import tempfile
 import threading
 import time
 import unittest
+import wave
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import tkinter as tk
 
 from config import ConfigStore
 from ocr_correction import OcrCorrector, CorrectionOptions, ReplacementRule
 from settings_ui import SettingsUI, _ShortcutRecorderDialog
 from speech_text import prepare_for_speech, native_offset_map
-from tts_engine import TtsEngine, _WindowsSpeechSession, _WordTiming
+from tts_engine import TtsEngine, TtsError, _SpeechRequest, _WindowsSpeechSession, _WordTiming
 from datetime import timedelta
 from hotkey_manager import HotkeyManager, HotkeyError
 from main import GameTextReaderApplication
@@ -576,6 +578,79 @@ class ModifierTests(unittest.TestCase):
 
 
 class NativeSeekTests(unittest.TestCase):
+    def test_structured_synthesis_retries_plain_on_backend_rejection(self):
+        document = prepare_for_speech('First line.\n\nSecond line.')
+        for backend in ('winrt', 'sapi'):
+            request = _SpeechRequest(1, document.spoken_text, '', 0, 0, pauses=document.pauses)
+            session = _WindowsSpeechSession()
+            session._start_stream = Mock()
+            if backend == 'winrt':
+                stream = object()
+                session._winrt_loop = SimpleNamespace(run_until_complete=Mock(
+                    side_effect=[ValueError('SSML unavailable'), stream]))
+                session._winrt_synthesizer = SimpleNamespace(
+                    options=SimpleNamespace(speaking_rate=1, audio_volume=1),
+                    voice=SimpleNamespace(language='en-US'),
+                    synthesize_ssml_to_stream_async=lambda value: value,
+                    synthesize_text_to_stream_async=lambda value: value)
+                with patch.object(session, '_winrt_word_timings', return_value=()):
+                    session._start_winrt(request, lambda: None)
+                self.assertEqual(session._winrt_loop.run_until_complete.call_count, 2)
+            else:
+                output = io.BytesIO()
+                with wave.open(output, 'wb') as wav:
+                    wav.setnchannels(1)
+                    wav.setsampwidth(2)
+                    wav.setframerate(22050)
+                    wav.writeframes(b'\0' * 100)
+                session._synthesise_sapi_wav = Mock(side_effect=[TtsError('XML unavailable'), output.getvalue()])
+                session._bytes_to_winrt_stream = Mock(return_value=object())
+                session._start_sapi(request, lambda: None)
+                self.assertEqual(session._synthesise_sapi_wav.call_args_list[-1].kwargs,
+                                 {'structured': False})
+            if backend == 'winrt':
+                self.assertEqual(request.native_offsets, native_offset_map(document.spoken_text))
+            session._start_stream.assert_called_once()
+
+    def test_structural_markup_keeps_real_voice_cues_and_seek_without_audio(self):
+        from markdown_reader import prepare_markdown_for_speech
+        source = ('### Science\n\nA & B are different from C.\n\n'
+                  '- First topic explains the physical world.\n'
+                  '  - Second topic explains living systems.\n'
+                  '  - Third topic explains the atmosphere.\n\n---\n\n'
+                  '### Principles\n\nEvidence is tested and revised over time.')
+        document = prepare_markdown_for_speech(source)
+        self.assertTrue(document.pauses)
+        voices = TtsEngine.list_voices()
+        for backend in ('winrt', 'sapi'):
+            voice = next((item for item in voices if item.engine == backend), None)
+            self.assertIsNotNone(voice)
+            sessions, errors = [], []
+            class CheckedSession(_WindowsSpeechSession):
+                def __init__(self):
+                    super().__init__()
+                    sessions.append(self)
+            engine = TtsEngine(session_factory=CheckedSession, on_error=errors.append)
+            try:
+                ticket = engine.play_reader(document, voice.identifier, 0, 0)
+                self.assertTrue(eventually(lambda: ticket.request_id in engine._active_requests, 15), errors)
+                request = engine._active_requests[ticket.request_id]
+                self.assertEqual(request.pauses, document.pauses)
+                self.assertTrue(eventually(lambda: bool(sessions[0]._winrt_current_channel and
+                                                 sessions[0]._winrt_current_channel.word_timings), 15), errors)
+                cues = sessions[0]._winrt_current_channel.word_timings
+                mapped = [request.native_offsets[min(cue.spoken_start, len(request.native_offsets)-1)]
+                          for cue in cues]
+                self.assertTrue(any(document.spoken_text[offset:].startswith('Science') for offset in mapped))
+                self.assertTrue(any(document.spoken_text[offset:].startswith('Principles') for offset in mapped))
+                self.assertTrue(eventually(lambda: sessions[0]._winrt_current_channel.player.playback_session.can_seek, 3))
+                revision = engine.seek_to_source(ticket.request_id, source, source.index('Principles'))
+                self.assertIsNotNone(revision)
+                self.assertTrue(eventually(lambda: revision.request_id in engine._active_requests, 5), errors)
+                self.assertFalse(errors)
+            finally:
+                engine.shutdown()
+
     def test_native_reader_speed_changes_for_winrt_and_sapi_without_audio(self):
         voices = TtsEngine.list_voices()
         source = "First sentence remains visible. Second sentence also remains visible."

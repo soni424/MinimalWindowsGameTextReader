@@ -43,6 +43,12 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.8-dev
+
+- Reader playback now adds short pauses between list items, clearer pauses between paragraphs and nested list levels, and a longer pause at section dividers. This applies to Markdown, plain text, OCR captures, and Auto-Read; ordinary wrapped lines stay continuous.
+- The pauses are automatic and do not alter the displayed or copied text. Windows and SAPI voices use their native speech markup for timed breaks; if a voice rejects it, the app retries the passage as plain speech. Voice-dependent punctuation timing may add to these pauses.
+- Word highlighting, double-click seeking, sentence navigation, and Reader speed continue to use the original text positions.
+
 ### Development build: 1.2.7-dev
 
 - Added **Edit / Preview** tabs to Last captured text. Pasting recognizable Markdown opens a styled preview automatically; ordinary text and OCR captures stay in Edit. The source remains editable, and **Copy** copies the original Markdown.

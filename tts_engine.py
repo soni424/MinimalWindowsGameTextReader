@@ -18,7 +18,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-from speech_text import SpeechDocument, SpeechWordSpan, prepare_for_speech, native_offset_map
+from speech_text import (SpeechDocument, SpeechPause, SpeechWordSpan, prepare_for_speech,
+                         native_offset_map, synthesis_input)
 from datetime import timedelta
 
 
@@ -109,6 +110,9 @@ class _SpeechRequest:
     source_text: str = ""
     word_spans: tuple[SpeechWordSpan, ...] = ()
     native_offsets: tuple[int, ...] = ()
+    spoken_to_native: tuple[int, ...] = ()
+    pauses: tuple[SpeechPause, ...] = ()
+    document: SpeechDocument | None = None
     paused: bool = False
     deferred_start: bool = False
     can_navigate: bool = False
@@ -529,7 +533,7 @@ class _WindowsSpeechSession:
         self._sapi_speaker.Voice = token
         self._selected_sapi_voice = wanted
 
-    def _synthesise_sapi_wav(self, request: _SpeechRequest) -> bytes:
+    def _synthesise_sapi_wav(self, request: _SpeechRequest, *, structured: bool = True) -> bytes:
         self._ensure_sapi()
         speaker = self._sapi_speaker
         memory_stream = None
@@ -564,7 +568,10 @@ class _WindowsSpeechSession:
                 pass
             # Synchronous synthesis is intentional: it writes to memory and
             # never touches the physical audio endpoint.
-            speaker.Speak(request.text, 0)
+            prepared = synthesis_input(request.text, request.pauses if structured else (), 'sapi')
+            speaker.Speak(prepared.text, 8 if structured and request.pauses else 0)
+            request.native_offsets = prepared.native_to_spoken
+            request.spoken_to_native = prepared.spoken_to_native
             if _PYTHONCOM is not None:
                 try:
                     _PYTHONCOM.PumpWaitingMessages()
@@ -820,19 +827,40 @@ class _WindowsSpeechSession:
         synthesizer.options.speaking_rate = max(0.25, min(2.0, 1.0 + request.rate / 10.0))
         synthesizer.options.audio_volume = request.volume / 100.0
         try:
-            stream = self._winrt_loop.run_until_complete(
-                synthesizer.synthesize_text_to_stream_async(request.text)
-            )
+            language = str(getattr(getattr(synthesizer, 'voice', None), 'language', 'en-US'))
+            prepared = synthesis_input(request.text, request.pauses, 'winrt', language)
+            if request.pauses:
+                try:
+                    stream = self._winrt_loop.run_until_complete(
+                        synthesizer.synthesize_ssml_to_stream_async(prepared.text))
+                except Exception:
+                    prepared = synthesis_input(request.text, (), 'winrt')
+                    stream = self._winrt_loop.run_until_complete(
+                        synthesizer.synthesize_text_to_stream_async(request.text))
+            else:
+                stream = self._winrt_loop.run_until_complete(
+                    synthesizer.synthesize_text_to_stream_async(request.text))
+            request.native_offsets = prepared.native_to_spoken
+            request.spoken_to_native = prepared.spoken_to_native
             if request.cancel.is_set():
                 self._close_stream(stream)
                 return
-            duration = max(0.5, len(request.text.split()) / 2.2)
+            duration = max(0.5, len(request.text.split()) / 2.2) + sum(
+                pause.milliseconds for pause in request.pauses) / 1000.0
+            timings = self._winrt_word_timings(stream)
+            if timings and request.pauses:
+                mapped = sum(1 for cue in timings[:4]
+                             if request.native_offsets[min(cue.spoken_end, len(request.native_offsets) - 1)]
+                             > request.native_offsets[min(cue.spoken_start, len(request.native_offsets) - 1)])
+                if not mapped and timings[0].spoken_end <= len(native_offset_map(request.text)) - 1:
+                    request.native_offsets = native_offset_map(request.text)
+                    request.spoken_to_native = synthesis_input(request.text, (), 'winrt').spoken_to_native
             self._start_stream(
                 stream,
                 on_started,
                 replace,
                 duration,
-                self._winrt_word_timings(stream),
+                timings,
                 request.playback_rate,
             )
         except TtsError:
@@ -846,7 +874,12 @@ class _WindowsSpeechSession:
         on_started: Callable[[], None],
         replace: bool = False,
     ) -> None:
-        wav_data = self._synthesise_sapi_wav(request)
+        try:
+            wav_data = self._synthesise_sapi_wav(request)
+        except TtsError:
+            if not request.pauses:
+                raise
+            wav_data = self._synthesise_sapi_wav(request, structured=False)
         if request.cancel.is_set():
             return
         stream = self._bytes_to_winrt_stream(wav_data)
@@ -1081,10 +1114,14 @@ class TtsEngine:
             clean = text.spoken_text.strip()
             source_text = text.source_text
             word_spans = text.words
+            pauses = text.pauses
+            document = text
         else:
             clean = " ".join(str(text).split())
             source_text = ""
             word_spans = ()
+            pauses = ()
+            document = None
         with self._current_lock:
             self._next_request_id += 1
             request_id = self._next_request_id
@@ -1107,6 +1144,8 @@ class TtsEngine:
             source_text=source_text,
             word_spans=word_spans,
             native_offsets=native_offset_map(clean),
+            pauses=pauses,
+            document=document,
             reader_controlled=reader_controlled,
             playback_rate=_normalise_reader_rate(playback_rate) if reader_controlled else 1.0,
         )
@@ -1235,6 +1274,8 @@ class TtsEngine:
                                      mode='replace', generation=self._generation, completion=ticket,
                                      source_text=source_text, word_spans=active.word_spans,
                                      native_offsets=active.native_offsets,
+                                     spoken_to_native=active.spoken_to_native, pauses=active.pauses,
+                                     document=active.document,
                                      reader_controlled=active.reader_controlled,
                                      playback_rate=active.playback_rate)
         self._put_command(_SpeechCommand('seek', request, target_id=request_id, source_offset=source_offset))
@@ -1270,7 +1311,7 @@ class TtsEngine:
         request = self._matching_active(request_id, source_text)
         if request is None or not request.can_navigate:
             return None
-        document = prepare_for_speech(source_text)
+        document = request.document or prepare_for_speech(source_text)
         if not any(word.source_start == source_offset for word in document.words):
             return None
         with self._current_lock:
@@ -1282,6 +1323,8 @@ class TtsEngine:
                                     request.volume, mode=request.mode, generation=request.generation,
                                     completion=ticket, source_text=source_text,
                                     word_spans=request.word_spans, native_offsets=request.native_offsets,
+                                    spoken_to_native=request.spoken_to_native, pauses=request.pauses,
+                                    document=request.document,
                                     paused=request.paused, can_navigate=True,
                                     reader_controlled=request.reader_controlled,
                                     playback_rate=request.playback_rate)
@@ -1873,7 +1916,7 @@ class TtsEngine:
                                 self._cancel_queued(sought)
                                 continue
                             sought.playback_rate = target.playback_rate
-                            document = prepare_for_speech(sought.source_text)
+                            document = sought.document or prepare_for_speech(sought.source_text)
                             source_word = next((word for word in document.words
                                                 if word.source_start == command.source_offset), None)
                             if source_word is None:
@@ -1884,7 +1927,9 @@ class TtsEngine:
                             moved = False
                             if old_word is not None and callable(getattr(target_session, "seek", None)):
                                 try:
-                                    native_start = len(target.text[:old_word.spoken_start].encode("utf-16-le")) // 2
+                                    native_start = (target.spoken_to_native[old_word.spoken_start]
+                                                    if target.spoken_to_native else
+                                                    len(target.text[:old_word.spoken_start].encode("utf-16-le")) // 2)
                                     if target.paused:
                                         moved = bool(target_session.seek(native_start, keep_paused=True))
                                     else:
@@ -1909,8 +1954,10 @@ class TtsEngine:
                                 self._notify_started(sought)
                                 self._notify_playback_state(sought, target_session)
                                 offset = old_word.spoken_start if old_word is not None else 0
-                                start = len(sought.text[:offset].encode("utf-16-le")) // 2
-                                end = len(sought.text[:old_word.spoken_end].encode("utf-16-le")) // 2
+                                start = (sought.spoken_to_native[offset] if sought.spoken_to_native else
+                                         len(sought.text[:offset].encode("utf-16-le")) // 2)
+                                end = (sought.spoken_to_native[old_word.spoken_end] if sought.spoken_to_native else
+                                       len(sought.text[:old_word.spoken_end].encode("utf-16-le")) // 2)
                                 self._notify_word(sought, start, end)
                             else:
                                 try:
@@ -1920,7 +1967,10 @@ class TtsEngine:
                                 suffix = document.from_source(source_word.source_start)
                                 sought.text = suffix.spoken_text
                                 sought.word_spans = suffix.words
+                                sought.pauses = suffix.pauses
+                                sought.document = document
                                 sought.native_offsets = native_offset_map(sought.text)
+                                sought.spoken_to_native = ()
                                 if sought.paused:
                                     sought.deferred_start = True
                                     self._notify_playback_state(sought, target_session)
@@ -1993,7 +2043,9 @@ class TtsEngine:
                             moved = False
                             if word is not None and callable(getattr(target_session, 'seek', None)):
                                 try:
-                                    native_start = len(target.text[:word.spoken_start].encode('utf-16-le')) // 2
+                                    native_start = (target.spoken_to_native[word.spoken_start]
+                                                    if target.spoken_to_native else
+                                                    len(target.text[:word.spoken_start].encode('utf-16-le')) // 2)
                                     moved = target_session.seek(native_start)
                                 except Exception:
                                     moved = False
@@ -2012,10 +2064,14 @@ class TtsEngine:
                                     target_session.stop()
                                 except Exception:
                                     pass
-                                suffix = prepare_for_speech(sought.source_text).from_source(command.source_offset)
+                                full_document = sought.document or prepare_for_speech(sought.source_text)
+                                suffix = full_document.from_source(command.source_offset)
                                 sought.text = suffix.spoken_text
                                 sought.word_spans = suffix.words
+                                sought.pauses = suffix.pauses
+                                sought.document = full_document
                                 sought.native_offsets = native_offset_map(sought.text)
+                                sought.spoken_to_native = ()
                                 self._unregister_overlap(target)
                                 active = self._start_request(sought, replace=True)
                         elif command.kind == "speak" and command.request is not None:

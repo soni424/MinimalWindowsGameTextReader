@@ -74,6 +74,27 @@ class MarkdownReaderTests(unittest.TestCase):
         self.assertIn('Evidence for the claim.', spoken)
         self.assertNotIn('https:', spoken)
 
+    def test_nested_science_outline_has_relative_pause_levels(self):
+        source = ('### 2. The Main Branches of Science\n\n'
+                  'Because the universe is vast, science is divided into several broad categories:\n\n'
+                  '- **Natural Sciences** (The physical and biological world):\n'
+                  '  - *Physical Sciences:* Physics (matter, energy, motion).\n'
+                  '  - *Life Sciences:* Zoology, Botany.\n'
+                  '- **Social Sciences** (Human behavior):\n'
+                  '  - Psychology and Sociology.\n\n---\n\n'
+                  '### 3. Key Principles of Science\n\nEmpirical evidence matters.')
+        document = prepare_markdown_for_speech(source)
+        by_word = {document.spoken_text[p.spoken_offset:].split()[0]: p.milliseconds
+                   for p in document.pauses}
+        self.assertEqual(by_word['Physical'], 350)
+        self.assertEqual(by_word['Life'], 180)
+        self.assertEqual(by_word['Social'], 350)
+        self.assertEqual(by_word['3.'], 700)
+        self.assertNotIn('**', document.spoken_text)
+        self.assertNotIn('---', document.spoken_text)
+        self.assertTrue(all(source[word.source_start:word.source_end].strip()
+                            for word in document.words))
+
     def test_external_navigation_is_restricted_and_browser_bridge_is_not_exposed(self):
         preview = MarkdownPreview.__new__(MarkdownPreview)
         with patch('markdown_preview.webbrowser.open') as browser:
