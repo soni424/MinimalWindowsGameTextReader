@@ -1,6 +1,14 @@
-# Game Text Reader 1.2.5-dev
+# Game Text Reader 1.2.6-dev
 
 Development build for testing before a stable release.
+
+## Reader playback speed
+
+- Added a remembered **0.5×–2.0×** speed slider and **1.0×** reset beside Last captured text playback controls.
+- Reader Play and Read Again change speed on the current Windows media stream without restarting speech. Paused position, sentence navigation, and word highlighting stay intact.
+- Captures, Auto-Read, and voice previews retain their existing speed. Unsupported playback rates revert to the last working value.
+
+## Previous development build: 1.2.5-dev
 
 ## Reader playback controls
 

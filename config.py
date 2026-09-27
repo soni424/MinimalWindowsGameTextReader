@@ -48,6 +48,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "speech": {
         "capture_mode": "replace",
         "max_overlap": 2,
+        "reader_playback_rate": 1.0,
     },
     "auto_read": {
         "speed": "normal",
@@ -328,6 +329,13 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         4,
         DEFAULT_CONFIG["speech"]["max_overlap"],
     )
+    try:
+        reader_playback_rate = float(raw_speech.get("reader_playback_rate", 1.0))
+        if not math.isfinite(reader_playback_rate):
+            raise ValueError
+    except (TypeError, ValueError):
+        reader_playback_rate = 1.0
+    reader_playback_rate = round(max(0.5, min(2.0, reader_playback_rate)) * 10) / 10
     strength = raw_ocr.get("strength", DEFAULT_CONFIG["ocr"]["strength"])
     strength = strength.strip().lower() if isinstance(strength, str) else DEFAULT_CONFIG["ocr"]["strength"]
     if strength not in {"conservative", "balanced", "strong"}:
@@ -353,6 +361,7 @@ def validate_config(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "speech": {
             "capture_mode": capture_mode,
             "max_overlap": max_overlap,
+            "reader_playback_rate": reader_playback_rate,
         },
         "auto_read": {
             "speed": auto_read_speed,

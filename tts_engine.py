@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 import queue
 import threading
 import time
@@ -111,6 +112,9 @@ class _SpeechRequest:
     paused: bool = False
     deferred_start: bool = False
     can_navigate: bool = False
+    reader_controlled: bool = False
+    playback_rate: float = 1.0
+    rate_result_sent: bool = False
 
 
 class _SapiWordEventSink:
@@ -151,6 +155,8 @@ class _SpeechCommand:
     max_overlap: int = DEFAULT_MAX_OVERLAP
     target_id: int = 0
     source_offset: int = 0
+    playback_rate: float = 1.0
+    revision: int = 0
 
 
 class _SpeechSession(Protocol):
@@ -185,6 +191,16 @@ def _normalise_max_overlap(value: object) -> int:
     return max(MIN_MAX_OVERLAP, min(MAX_MAX_OVERLAP, number))
 
 
+def _normalise_reader_rate(value: object) -> float:
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(rate):
+        return 1.0
+    return round(max(0.5, min(2.0, rate)) * 10) / 10
+
+
 class _WindowsSpeechSession:
     """Own worker-thread speech synthesis and isolated MediaPlayer channels."""
 
@@ -210,6 +226,11 @@ class _WindowsSpeechSession:
         self._winrt_deadline = 0.0
         self._paused_at = 0.0
         self._sapi_word_timings: tuple[_WordTiming, ...] = ()
+        self._playback_rate = 1.0
+        self._stream_duration = 0.0
+        self._playback_rate_error = ""
+        self._pending_playback_rate: float | None = None
+        self._pending_rate_since = 0.0
 
     def prepare(self, voice_id: str) -> None:
         # All playback uses MediaPlayer. SAPI is only a synthesizer for SAPI
@@ -249,6 +270,7 @@ class _WindowsSpeechSession:
     def poll(self) -> bool:
         """Return whether the active media playback has finished."""
         self._close_retired_channels()
+        self._apply_pending_playback_rate()
         if self._active_backend != "winrt":
             return True
         channel = self._winrt_current_channel
@@ -300,6 +322,73 @@ class _WindowsSpeechSession:
             self._paused_at = 0.0
             channel.player.play()
         return True
+
+    def effective_playback_rate(self) -> float:
+        return self._playback_rate
+
+    def _refresh_deadline(self) -> None:
+        channel = self._winrt_current_channel
+        if channel is None:
+            return
+        try:
+            playback = channel.player.playback_session
+            duration = playback.natural_duration.total_seconds()
+            position = playback.position.total_seconds()
+            if duration <= 0:
+                duration = self._stream_duration
+        except Exception:
+            duration, position = self._stream_duration, 0.0
+        self._winrt_deadline = time.monotonic() + max(
+            1.0, (max(0.0, duration - position) / self._playback_rate) + 2.0
+        )
+
+    def set_playback_rate(self, rate: float) -> bool:
+        """Change only this session's current stream, on its owning worker."""
+        channel = self._winrt_current_channel
+        if channel is None or channel.finished.is_set() or channel.failed.is_set():
+            return False
+        desired = _normalise_reader_rate(rate)
+        playback = channel.player.playback_session
+        try:
+            supports = getattr(playback, "is_supported_playback_rate_range", None)
+            if callable(supports) and not supports(desired, desired):
+                self._playback_rate_error = "Windows reports this rate as unsupported."
+                return False
+            playback.playback_rate = desired
+            actual = float(playback.playback_rate)
+            if abs(actual - desired) > 0.02:
+                self._playback_rate_error = f"Windows kept {actual:.1f}× instead."
+                try:
+                    playback.playback_rate = self._playback_rate
+                except Exception:
+                    pass
+                return False
+        except Exception as exc:
+            self._playback_rate_error = str(exc)
+            return False
+        self._playback_rate = desired
+        self._playback_rate_error = ""
+        self._pending_playback_rate = None
+        self._refresh_deadline()
+        if self._paused_at:
+            self._paused_at = time.monotonic()
+        return True
+
+    def rate_result_ready(self) -> bool:
+        return self._pending_playback_rate is None
+
+    def queue_playback_rate(self, rate: float) -> None:
+        self._pending_playback_rate = _normalise_reader_rate(rate)
+        self._pending_rate_since = time.monotonic()
+
+    def _apply_pending_playback_rate(self) -> None:
+        desired = self._pending_playback_rate
+        if desired is None:
+            return
+        if self.set_playback_rate(desired):
+            return
+        if time.monotonic() - self._pending_rate_since >= 1.0:
+            self._pending_playback_rate = None
 
     def has_word_timing(self) -> bool:
         channel = self._winrt_current_channel
@@ -611,6 +700,7 @@ class _WindowsSpeechSession:
         replace: bool,
         duration_seconds: float,
         word_timings: tuple[_WordTiming, ...] = (),
+        playback_rate: float = 1.0,
     ) -> None:
         self._ensure_winrt()
         self._close_retired_channels()
@@ -622,17 +712,24 @@ class _WindowsSpeechSession:
         channel.word_timings = word_timings
         self._winrt_current_channel = channel
         self._winrt_player = channel.player
+        self._playback_rate = 1.0
+        self._stream_duration = duration_seconds
         try:
             self._set_media_stream(channel, stream)
             channel.player.volume = 1.0
             channel.player.play()
+            if playback_rate != 1.0:
+                self._pending_playback_rate = playback_rate
+                self._pending_rate_since = time.monotonic()
+            else:
+                self._pending_playback_rate = None
         except Exception:
             self._winrt_current_channel = None
             self._winrt_player = None
             self._close_channel(channel)
             raise
         self._active_backend = "winrt"
-        self._winrt_deadline = time.monotonic() + max(0.75, duration_seconds + 1.0)
+        self._refresh_deadline()
         self._paused_at = 0.0
         on_started()
 
@@ -680,8 +777,7 @@ class _WindowsSpeechSession:
         channel.player.pause()
         playback.position = timedelta(seconds=target)
         channel.next_word_timing = timing_index
-        duration = playback.natural_duration.total_seconds()
-        self._winrt_deadline = time.monotonic() + max(1.0, duration - target + 2.0)
+        self._refresh_deadline()
         if keep_paused:
             self._paused_at = time.monotonic()
         else:
@@ -737,6 +833,7 @@ class _WindowsSpeechSession:
                 replace,
                 duration,
                 self._winrt_word_timings(stream),
+                request.playback_rate,
             )
         except TtsError:
             raise
@@ -763,6 +860,7 @@ class _WindowsSpeechSession:
                 replace,
                 duration,
                 self._sapi_word_timings,
+                request.playback_rate,
             )
         except Exception:
             self._close_stream(stream)
@@ -813,6 +911,7 @@ class TtsEngine:
         on_document_started_with_id: Callable[[int, str], None] | None = None,
         on_word_with_id: Callable[[int, str, int, int], None] | None = None,
         on_playback_state_with_id: Callable[[int, str, bool, bool], None] | None = None,
+        on_reader_rate_result: Callable[[int, str, float, float], None] | None = None,
         initial_voice_id: str = "",
         initial_capture_mode: str = DEFAULT_CAPTURE_MODE,
         initial_max_overlap: int = DEFAULT_MAX_OVERLAP,
@@ -826,6 +925,8 @@ class TtsEngine:
         self._on_document_started_with_id = on_document_started_with_id
         self._on_word_with_id = on_word_with_id
         self._on_playback_state_with_id = on_playback_state_with_id
+        self._on_reader_rate_result = on_reader_rate_result
+        self._latest_reader_rate_revision = 0
         self._latest_seek_id = 0
         self._latest_reader_seek_id = 0
         self._discard_before_id = 0
@@ -973,6 +1074,8 @@ class TtsEngine:
         volume: int,
         *,
         mode: str,
+        reader_controlled: bool = False,
+        playback_rate: float = 1.0,
     ) -> SpeechTicket:
         if isinstance(text, SpeechDocument):
             clean = text.spoken_text.strip()
@@ -1004,6 +1107,8 @@ class TtsEngine:
             source_text=source_text,
             word_spans=word_spans,
             native_offsets=native_offset_map(clean),
+            reader_controlled=reader_controlled,
+            playback_rate=_normalise_reader_rate(playback_rate) if reader_controlled else 1.0,
         )
         if self._shutdown.is_set():
             request.cancel.set()
@@ -1058,9 +1163,19 @@ class TtsEngine:
 
     def play_reader(
         self, text: SpeechDocument, voice_id: str = "", rate: int = 0, volume: int = 100,
+        playback_rate: float = 1.0,
     ) -> SpeechTicket:
         """Start a reader-owned channel without replacing unrelated speech."""
-        return self._submit(text, voice_id, rate, volume, mode="reader")
+        return self._submit(text, voice_id, rate, volume, mode="reader",
+                            reader_controlled=True, playback_rate=playback_rate)
+
+    def replace_reader(
+        self, text: SpeechDocument, voice_id: str = "", rate: int = 0, volume: int = 100,
+        playback_rate: float = 1.0,
+    ) -> SpeechTicket:
+        """Restart Read Again with its existing replacement policy."""
+        return self._submit(text, voice_id, rate, volume, mode="replace",
+                            reader_controlled=True, playback_rate=playback_rate)
 
     def speak_mode(
         self,
@@ -1119,7 +1234,9 @@ class TtsEngine:
             request = _SpeechRequest(identifier, active.text, active.voice_id, active.rate, active.volume,
                                      mode='replace', generation=self._generation, completion=ticket,
                                      source_text=source_text, word_spans=active.word_spans,
-                                     native_offsets=active.native_offsets)
+                                     native_offsets=active.native_offsets,
+                                     reader_controlled=active.reader_controlled,
+                                     playback_rate=active.playback_rate)
         self._put_command(_SpeechCommand('seek', request, target_id=request_id, source_offset=source_offset))
         return ticket
 
@@ -1165,7 +1282,9 @@ class TtsEngine:
                                     request.volume, mode=request.mode, generation=request.generation,
                                     completion=ticket, source_text=source_text,
                                     word_spans=request.word_spans, native_offsets=request.native_offsets,
-                                    paused=request.paused, can_navigate=True)
+                                    paused=request.paused, can_navigate=True,
+                                    reader_controlled=request.reader_controlled,
+                                    playback_rate=request.playback_rate)
         self._put_command(_SpeechCommand("reader_seek", sought, target_id=request.request_id,
                                          source_offset=source_offset))
         return ticket
@@ -1190,6 +1309,19 @@ class TtsEngine:
             if request is not None:
                 request.cancel.set()
         self._put_command(_SpeechCommand("cancel", target_id=target_id))
+        return True
+
+    def set_reader_playback_rate(self, request_id: int, source_text: str, rate: float) -> bool:
+        """Change only an active Reader-initiated request; never touch captures."""
+        request = self._matching_active(request_id, source_text)
+        if request is None or not request.reader_controlled:
+            return False
+        with self._current_lock:
+            self._latest_reader_rate_revision += 1
+            revision = self._latest_reader_rate_revision
+        self._put_command(_SpeechCommand("reader_rate", target_id=request.request_id,
+                                          playback_rate=_normalise_reader_rate(rate),
+                                          revision=revision))
         return True
 
     def stop(self) -> None:
@@ -1320,6 +1452,22 @@ class TtsEngine:
             except Exception:
                 pass
 
+    def _notify_reader_rate_result(self, request: _SpeechRequest, session: object) -> None:
+        if (not request.reader_controlled or request.rate_result_sent
+                or self._on_reader_rate_result is None):
+            return
+        ready = getattr(session, "rate_result_ready", None)
+        if callable(ready) and not ready():
+            return
+        request.rate_result_sent = True
+        effective = getattr(session, "effective_playback_rate", None)
+        try:
+            actual = float(effective()) if callable(effective) else request.playback_rate
+            self._on_reader_rate_result(request.request_id, request.source_text,
+                                         request.playback_rate, actual)
+        except Exception:
+            pass
+
     def _notify_word(
         self, request: _SpeechRequest, spoken_start: int, spoken_end: int
     ) -> None:
@@ -1444,6 +1592,7 @@ class TtsEngine:
             self._set_active(None)
             return None
         self._notify_playback_state(request, session)
+        self._notify_reader_rate_result(request, session)
         # A blocking compatibility session is already complete.
         if not self._supports_nonblocking(session) or type(self)._play is not TtsEngine._play:
             self._finish_request(request)
@@ -1471,6 +1620,7 @@ class TtsEngine:
             self._finish_request(request)
             return None
         self._notify_playback_state(request, session)
+        self._notify_reader_rate_result(request, session)
         if not self._supports_nonblocking(session):
             self._unregister_overlap(request)
             self._finish_request(request)
@@ -1657,6 +1807,46 @@ class TtsEngine:
                                         self._notify_playback_state(target, target_session)
                                 except Exception as exc:
                                     self._report_error(target, exc)
+                        elif command.kind == "reader_rate":
+                            if command.revision != self._latest_reader_rate_revision:
+                                continue
+                            target_id = command.target_id
+                            with self._current_lock:
+                                for _ in range(128):
+                                    if target_id not in self._seek_aliases:
+                                        break
+                                    target_id = self._seek_aliases[target_id]
+                            if active is not None and active.request_id == target_id:
+                                target, target_session = active, self._session
+                            else:
+                                pair = reader_active.get(target_id) or overlap_active.get(target_id)
+                                target, target_session = pair if pair is not None else (None, None)
+                            if (target is not None and target_session is not None
+                                    and target.reader_controlled and not target.cancel.is_set()):
+                                ready = getattr(target_session, "rate_result_ready", None)
+                                rate_pending = callable(ready) and not ready()
+                                if target.deferred_start or rate_pending:
+                                    if rate_pending and not target.deferred_start:
+                                        target_session.queue_playback_rate(command.playback_rate)
+                                    target.playback_rate = command.playback_rate
+                                    target.rate_result_sent = False
+                                    if rate_pending:
+                                        continue
+                                    applied = True
+                                else:
+                                    setter = getattr(target_session, "set_playback_rate", None)
+                                    try:
+                                        applied = bool(setter(command.playback_rate)) if callable(setter) else False
+                                    except Exception:
+                                        applied = False
+                                    if applied:
+                                        target.playback_rate = command.playback_rate
+                                if self._on_reader_rate_result is not None:
+                                    try:
+                                        self._on_reader_rate_result(target.request_id, target.source_text,
+                                            command.playback_rate, target.playback_rate)
+                                    except Exception:
+                                        pass
                         elif command.kind == "reader_seek" and command.request is not None:
                             sought = command.request
                             target_id = command.target_id
@@ -1682,6 +1872,7 @@ class TtsEngine:
                                     or target.source_text != sought.source_text or not target.can_navigate):
                                 self._cancel_queued(sought)
                                 continue
+                            sought.playback_rate = target.playback_rate
                             document = prepare_for_speech(sought.source_text)
                             source_word = next((word for word in document.words
                                                 if word.source_start == command.source_offset), None)
@@ -1773,6 +1964,7 @@ class TtsEngine:
                                     or sought.generation != self._generation):
                                 self._cancel_queued(sought)
                                 continue
+                            sought.playback_rate = target.playback_rate
                             self._cancel_queued(pending)
                             pending = None
                             self._set_pending(None)
@@ -1878,6 +2070,7 @@ class TtsEngine:
                         try:
                             self._drain_session_progress(active, self._session)
                             finished = bool(self._session.poll())
+                            self._notify_reader_rate_result(active, self._session)
                         except Exception as exc:
                             self._report_error(active, exc)
                             finished = True
@@ -1897,6 +2090,7 @@ class TtsEngine:
                     try:
                         self._drain_session_progress(request, session)
                         finished = bool(session.poll())
+                        self._notify_reader_rate_result(request, session)
                     except Exception as exc:
                         self._report_error(request, exc)
                         finished = True
@@ -1916,6 +2110,7 @@ class TtsEngine:
                     try:
                         self._drain_session_progress(request, session)
                         finished = bool(session.poll())
+                        self._notify_reader_rate_result(request, session)
                     except Exception as exc:
                         self._report_error(request, exc)
                         finished = True

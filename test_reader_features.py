@@ -118,11 +118,14 @@ class SilentSession:
         self.can_seek = True
         self.paused = False
         self.timing = True
+        self.playback_rate = 1.0
+        self.supports_rate = True
     def prepare(self, _voice): pass
     def start(self, request, started, replace=False):
         self.requests.append(request)
         self.finished = False
         self.paused = False
+        self.playback_rate = request.playback_rate
         started()
     def poll(self): return self.finished and not self.paused
     def seek(self, offset, *, keep_paused=False):
@@ -136,6 +139,12 @@ class SilentSession:
         self.paused = False
         return True
     def has_word_timing(self): return self.timing
+    def set_playback_rate(self, rate):
+        if not self.supports_rate:
+            return False
+        self.playback_rate = rate
+        return True
+    def effective_playback_rate(self): return self.playback_rate
     def drain_word_events(self):
         events, self.events = self.events, []
         return events
@@ -222,12 +231,14 @@ class ReaderTransportTests(unittest.TestCase):
     def setUp(self):
         self.sessions = []
         self.states = []
+        self.rates = []
         def factory():
             session = SilentSession()
             self.sessions.append(session)
             return session
         self.engine = TtsEngine(session_factory=factory,
-            on_playback_state_with_id=lambda *state: self.states.append(state))
+            on_playback_state_with_id=lambda *state: self.states.append(state),
+            on_reader_rate_result=lambda *result: self.rates.append(result))
         self.document = prepare_for_speech("First sentence. Second sentence! Third sentence?")
 
     def tearDown(self):
@@ -301,6 +312,95 @@ class ReaderTransportTests(unittest.TestCase):
         self.assertTrue(revision.wait(1))
         self.assertIn(unrelated.request_id, self.engine._active_requests)
 
+    def test_live_speed_targets_only_reader_and_survives_paused_seek(self):
+        other = self.engine.overlap(self.document)
+        self.assertTrue(eventually(lambda: other.request_id in self.engine._active_requests))
+        reader = self.engine.play_reader(self.document, playback_rate=1.3)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        self.assertEqual(self.sessions[1].playback_rate, 1.3)
+        self.assertFalse(self.engine.set_reader_playback_rate(other.request_id, self.document.source_text, 1.8))
+        self.assertTrue(self.engine.pause_request(reader.request_id, self.document.source_text))
+        self.assertTrue(eventually(lambda: self.sessions[1].paused))
+        self.assertTrue(self.engine.set_reader_playback_rate(reader.request_id, self.document.source_text, 1.8))
+        self.assertTrue(eventually(lambda: self.sessions[1].playback_rate == 1.8))
+        self.assertTrue(self.sessions[1].paused)
+        self.assertEqual(self.sessions[0].playback_rate, 1.0)
+        next_sentence = self.document.sentences[1].source_start
+        revision = self.engine.navigate_reader(reader.request_id, self.document.source_text, next_sentence)
+        self.assertTrue(eventually(lambda: revision.request_id in self.engine._active_requests))
+        self.assertEqual(self.engine._active_requests[revision.request_id].playback_rate, 1.8)
+        self.assertTrue(self.engine.set_reader_playback_rate(reader.request_id, self.document.source_text, 0.6))
+        self.assertTrue(eventually(lambda: self.sessions[1].playback_rate == 0.6))
+        self.assertTrue(self.sessions[1].paused)
+
+    def test_unsupported_speed_reports_last_working_rate(self):
+        reader = self.engine.play_reader(self.document, playback_rate=1.2)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        self.sessions[0].supports_rate = False
+        self.assertTrue(self.engine.set_reader_playback_rate(reader.request_id, self.document.source_text, 1.9))
+        self.assertTrue(eventually(lambda: self.rates and self.rates[-1][2] == 1.9))
+        self.assertEqual(self.rates[-1][3], 1.2)
+        self.assertEqual(self.sessions[0].playback_rate, 1.2)
+
+    def test_read_again_channel_accepts_targeted_speed_change(self):
+        unrelated = self.engine.overlap("Other speech")
+        self.assertTrue(eventually(lambda: unrelated.request_id in self.engine._active_requests))
+        replay = self.engine.replace_reader(self.document, playback_rate=1.4)
+        self.assertTrue(eventually(lambda: replay.request_id in self.engine._active_requests))
+        self.assertTrue(self.engine.set_reader_playback_rate(replay.request_id,
+                                                             self.document.source_text, 0.8))
+        self.assertTrue(eventually(lambda: self.engine._active_requests[replay.request_id].playback_rate == 0.8))
+        self.assertIn(unrelated.request_id, self.engine._active_requests)
+
+    def test_stale_reader_speed_result_cannot_rollback_newer_request(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = ConfigStore(Path(folder) / "config.json")
+            store.load()
+            store.update(speech={"reader_playback_rate": 1.6})
+            app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+            app.config = store
+            app.text_state = SimpleNamespace(last_successful_text=self.document.source_text)
+            app._reader_current_id = 8
+            app._schedule = lambda callback: callback()
+            messages = []
+            app.ui = SimpleNamespace(set_reader_rate=lambda value: messages.append(value),
+                                     set_status=lambda *_args, **_kwargs: None)
+            app._reader_rate_result(7, self.document.source_text, 1.6, 1.0)
+            self.assertEqual(store.get()["speech"]["reader_playback_rate"], 1.6)
+            app._reader_rate_result(8, self.document.source_text, 1.6, 1.2)
+            self.assertEqual(store.get()["speech"]["reader_playback_rate"], 1.2)
+            self.assertEqual(messages, [1.2])
+
+    def test_rapid_speed_changes_keep_latest_value(self):
+        reader = self.engine.play_reader(self.document)
+        self.assertTrue(eventually(lambda: reader.request_id in self.engine._active_requests))
+        for value in (0.7, 1.4, 1.7):
+            self.assertTrue(self.engine.set_reader_playback_rate(reader.request_id, self.document.source_text, value))
+        self.assertTrue(eventually(lambda: self.sessions[0].playback_rate == 1.7))
+        self.assertEqual(self.rates[-1][2:], (1.7, 1.7))
+
+    def test_reader_entry_points_use_reader_rate_but_capture_voice_does_not(self):
+        app = GameTextReaderApplication.__new__(GameTextReaderApplication)
+        app.config = SimpleNamespace(get=lambda: {"voice": "voice-id", "rate": 3, "volume": 40,
+            "speech": {"reader_playback_rate": 1.6}})
+        app.text_state = SimpleNamespace(last_successful_text=self.document.source_text,
+                                          end_speech=lambda: None)
+        calls = []
+        def record(kind, *args):
+            calls.append((kind, *args))
+            return SimpleNamespace(request_id=len(calls))
+        app.tts = SimpleNamespace(stop=lambda: calls.append(("stop",)),
+            replace_reader=lambda *args: record("again", *args),
+            play_reader=lambda *args: record("play", *args))
+        app.ui = SimpleNamespace(set_status=lambda *_args: None)
+        app.read_again()
+        app.reader_play_pause(None, self.document.source_text, False)
+        self.assertEqual(calls[1][0], "again")
+        self.assertEqual(calls[2][0], "play")
+        self.assertEqual(calls[1][-1], 1.6)
+        self.assertEqual(calls[2][-1], 1.6)
+        self.assertEqual(calls[1][2:5], ("voice-id", 3, 40))
+
 
 class ReaderUiTests(unittest.TestCase):
     def setUp(self):
@@ -346,9 +446,25 @@ class ReaderUiTests(unittest.TestCase):
         self.ui.clear_speech_progress(8)
         self.assertEqual(self.ui.play_pause_button.cget("text"), "Play")
         self.ui._reflow_reader_actions(700)
-        self.assertEqual(int(self.ui._reader_trailing_actions.grid_info()["row"]), 1)
-        self.ui._reflow_reader_actions(1200)
+        self.assertEqual(int(self.ui._reader_trailing_actions.grid_info()["row"]), 2)
+        self.ui._reflow_reader_actions(1400)
         self.assertEqual(int(self.ui._reader_trailing_actions.grid_info()["row"]), 0)
+    def test_reader_speed_control_saves_reset_and_wraps(self):
+        changes = []
+        self.ui.on_reader_speed_changed = lambda request_id, source, rate: (
+            changes.append((request_id, source, rate)),
+            self.store.update(speech={"reader_playback_rate": rate})["speech"]["reader_playback_rate"]
+        )[1]
+        self.ui.set_last_text("A visible passage.")
+        self.ui.reader_rate_value.set(1.6)
+        self.ui._reader_rate_moved("1.6")
+        self.ui._save_reader_rate()
+        self.assertEqual(changes[-1], (None, "A visible passage.", 1.6))
+        self.assertEqual(self.store.get()["speech"]["reader_playback_rate"], 1.6)
+        self.ui._reset_reader_rate()
+        self.assertEqual(self.store.get()["speech"]["reader_playback_rate"], 1.0)
+        self.ui._reflow_reader_actions(700)
+        self.assertEqual(int(self.ui.reader_speed_controls.grid_info()["row"]), 1)
     def test_auto_read_speed_selector_saves_and_rolls_back_on_failure(self):
         def save_speed(speed):
             return self.store.update(auto_read={"speed": speed})["auto_read"]["speed"]
@@ -460,6 +576,33 @@ class ModifierTests(unittest.TestCase):
 
 
 class NativeSeekTests(unittest.TestCase):
+    def test_native_reader_speed_changes_for_winrt_and_sapi_without_audio(self):
+        voices = TtsEngine.list_voices()
+        source = "First sentence remains visible. Second sentence also remains visible."
+        for backend in ("winrt", "sapi"):
+            voice = next((item for item in voices if item.engine == backend), None)
+            self.assertIsNotNone(voice)
+            sessions, rates, errors = [], [], []
+            class CheckedSession(_WindowsSpeechSession):
+                def __init__(self):
+                    super().__init__()
+                    sessions.append(self)
+            engine = TtsEngine(session_factory=CheckedSession,
+                on_reader_rate_result=lambda *result: rates.append(result), on_error=errors.append)
+            try:
+                ticket = engine.play_reader(prepare_for_speech(source), voice.identifier, 0, 0, 1.2)
+                self.assertTrue(eventually(lambda: rates and rates[-1][0] == ticket.request_id, 15), errors)
+                self.assertAlmostEqual(rates[-1][-1], 1.2, msg=sessions[0]._playback_rate_error)
+                self.assertTrue(engine.pause_request(ticket.request_id, source))
+                self.assertTrue(eventually(lambda: sessions[0]._paused_at > 0, 3))
+                self.assertTrue(engine.set_reader_playback_rate(ticket.request_id, source, 0.7))
+                self.assertTrue(eventually(lambda: rates[-1][2] == 0.7, 3), errors)
+                self.assertAlmostEqual(rates[-1][-1], 0.7)
+                self.assertTrue(sessions[0]._paused_at > 0)
+                self.assertFalse(errors)
+            finally:
+                engine.shutdown()
+
     def test_native_reader_pause_resume_preserves_stream_and_watchdog(self):
         voices = TtsEngine.list_voices()
         source = ("First we investigate the classroom and look for clues. "

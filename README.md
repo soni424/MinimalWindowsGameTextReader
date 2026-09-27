@@ -43,6 +43,11 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.6-dev
+
+- Added a Reader-only **Reading speed** control beside the playback buttons, from **0.5× to 2.0×** in 0.1× steps, with a **1.0×** reset. It changes an active Reader passage without restarting it and remembers the choice across updates.
+- The control applies to **Play** and **Read Again** (including its shortcut and tray action), not new captures, Auto-Read, or voice previews. Windows may reject a rate for an output stream; the app then keeps the last working speed and reports it.
+
 ### Development build: 1.2.5-dev
 
 - Added **Previous sentence**, **Play/Pause**, and **Next sentence** beside Last captured text. Play starts the visible passage when idle; Read Again still restarts it.
@@ -99,6 +104,8 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
 
 In **Last captured text**, use **Play** to begin the visible passage, **Pause** to hold its audio and highlighted word, and **Play** again to resume. **Previous sentence** and **Next sentence** jump across spoken sentence boundaries, including headings and bullet items; an ordinary wrapped OCR line stays in its sentence. Skipping while paused stays paused. The controls follow only the current passage and leave other voices alone. If a voice supplies no word timing, Play/Pause remains available but sentence skipping is disabled.
+
+Use **Reading speed** beside these controls to slow or accelerate this passage while it plays. The selected multiplier is remembered, including for **Read Again**, but does not alter the Voice & shortcuts base speed or Auto-Read timing. Extreme playback rates may sound less natural.
 
 For hands-free dialogue, select a tightly framed saved capture area around the game's dialogue text, then choose **Start Auto-Read** in the Reader tab (or the tray menu). If settings are in front, return to the game within 30 seconds; starting through an assigned Auto-Read shortcut while in the game binds it immediately. Choose **Normal** for conservative timing, **Fast** for rapid two-result confirmation, or **Instant** for the lowest safe latency. Normal checks about every 350 ms and waits roughly 500 ms for visual stability; Fast checks about every 120 ms and waits roughly 180 ms; Instant checks and settles at roughly 60 ms and can speak its first usable result. Fast and Normal require two matching corrected OCR results. Instant still confirms tiny/noisy or near-duplicate results, and if a line keeps growing it cancels only that partial Auto-Read voice, suppresses intermediate fragments, then restarts the completed line after two matches and roughly 250 ms unchanged. Standard OCR is fastest; Enhanced OCR or difficult text can take longer.
 
@@ -187,7 +194,7 @@ The tracked version in `app_version.py` is shared by the header and executable m
 python -m unittest discover -v
 ```
 
-The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, sentence mapping and reader playback controls, themed scrollbars, pronunciation previews, Windows startup registration, Normal/Fast/Instant Auto-Read timing and recovery, targeted request cancellation, deduplication, bounded pending work and stale-job rejection, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
+The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, sentence mapping, Reader playback and speed controls, themed scrollbars, pronunciation previews, Windows startup registration, Normal/Fast/Instant Auto-Read timing and recovery, targeted request cancellation, deduplication, bounded pending work and stale-job rejection, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
 
 ## App icon assets
 

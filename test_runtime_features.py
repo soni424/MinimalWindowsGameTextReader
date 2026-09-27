@@ -9,6 +9,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from capture_profiles import (
@@ -150,16 +151,29 @@ class ConfigurationMigrationTests(unittest.TestCase):
     def test_rapid_capture_mode_is_validated_and_persisted(self) -> None:
         self.assertEqual(
             validate_config({"speech": {"capture_mode": "replace"}})["speech"],
-            {"capture_mode": "replace", "max_overlap": 2},
+            {"capture_mode": "replace", "max_overlap": 2, "reader_playback_rate": 1.0},
         )
         self.assertEqual(
             validate_config({"speech": {"capture_mode": "unknown"}})["speech"],
-            {"capture_mode": "replace", "max_overlap": 2},
+            {"capture_mode": "replace", "max_overlap": 2, "reader_playback_rate": 1.0},
         )
         self.assertEqual(
             validate_config({"speech": {"capture_mode": "overlap", "max_overlap": 9}})["speech"],
-            {"capture_mode": "overlap", "max_overlap": 4},
+            {"capture_mode": "overlap", "max_overlap": 4, "reader_playback_rate": 1.0},
         )
+
+    def test_reader_rate_defaults_clamps_and_survives_reload(self) -> None:
+        self.assertEqual(validate_config({})["speech"]["reader_playback_rate"], 1.0)
+        for value, expected in (("1.7", 1.7), (5, 2.0), (0.1, 0.5),
+                                ("nan", 1.0), ("bad", 1.0)):
+            self.assertEqual(validate_config({"speech": {"reader_playback_rate": value}})
+                             ["speech"]["reader_playback_rate"], expected)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            store = ConfigStore(path)
+            store.load()
+            store.update(speech={"reader_playback_rate": 1.6})
+            self.assertEqual(ConfigStore(path).load()["speech"]["reader_playback_rate"], 1.6)
 
 
 class CaptureProfileTests(unittest.TestCase):
@@ -549,14 +563,15 @@ class ReaderStateTests(unittest.TestCase):
             def stop(self) -> None:
                 self.stopped += 1
 
-            def speak(self, *args: object) -> threading.Event:
+            def replace_reader(self, *args: object) -> threading.Event:
                 self.spoken.append(args)
-                return threading.Event()
+                return SimpleNamespace(request_id=1)
 
         class Config:
             @staticmethod
             def get() -> dict[str, object]:
-                return {"voice": "voice", "rate": 2, "volume": 88}
+                return {"voice": "voice", "rate": 2, "volume": 88,
+                        "speech": {"reader_playback_rate": 1.6}}
 
         class Ui:
             statuses: list[str] = []
@@ -578,7 +593,7 @@ class ReaderStateTests(unittest.TestCase):
         self.assertEqual(app.tts.stopped, 1)
         self.assertEqual(len(app.tts.spoken), 1)
         self.assertEqual(app.tts.spoken[0][0].spoken_text, "Final corrected dialogue.")
-        self.assertEqual(app.tts.spoken[0][1:], ("voice", 2, 88))
+        self.assertEqual(app.tts.spoken[0][1:], ("voice", 2, 88, 1.6))
 
     def test_read_again_speaks_manual_text_without_ocr_correction(self) -> None:
         spoken: list[tuple[object, ...]] = []
@@ -587,14 +602,15 @@ class ReaderStateTests(unittest.TestCase):
             def stop(self) -> None:
                 pass
 
-            def speak(self, *args: object) -> threading.Event:
+            def replace_reader(self, *args: object) -> threading.Event:
                 spoken.append(args)
-                return threading.Event()
+                return SimpleNamespace(request_id=1)
 
         class Config:
             @staticmethod
             def get() -> dict[str, object]:
-                return {"voice": "voice", "rate": 1, "volume": 70}
+                return {"voice": "voice", "rate": 1, "volume": 70,
+                        "speech": {"reader_playback_rate": 1.0}}
 
         class Ui:
             def set_status(self, _message: str, error: bool = False) -> None:
@@ -611,7 +627,7 @@ class ReaderStateTests(unittest.TestCase):
 
         self.assertEqual(len(spoken), 1)
         self.assertEqual(spoken[0][0].spoken_text, "Noytibos wrapped text.")
-        self.assertEqual(spoken[0][1:], ("voice", 1, 70))
+        self.assertEqual(spoken[0][1:], ("voice", 1, 70, 1.0))
 
 
 class StartupFlowTests(unittest.TestCase):

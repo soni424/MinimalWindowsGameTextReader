@@ -440,6 +440,7 @@ class SettingsUI:
         on_reader_play_pause: Callable[[int | None, str, bool], None] | None = None,
         on_reader_navigate: Callable[[int, str, int], None] | None = None,
         on_reader_invalidated: Callable[[int], None] | None = None,
+        on_reader_speed_changed: Callable[[int | None, str, float], float] | None = None,
         on_review_result: Callable[[CorrectionResult], None] | None = None,
         on_profile_create: Callable[[str], None] | None = None,
         on_profile_rename: Callable[[str, str], None] | None = None,
@@ -467,6 +468,7 @@ class SettingsUI:
         self.on_reader_play_pause = on_reader_play_pause or (lambda *_args: None)
         self.on_reader_navigate = on_reader_navigate or (lambda *_args: None)
         self.on_reader_invalidated = on_reader_invalidated or (lambda *_args: None)
+        self.on_reader_speed_changed = on_reader_speed_changed or (lambda _id, _text, rate: rate)
         self.on_review_result = on_review_result or (lambda _result: None)
         self.on_profile_create = on_profile_create or (lambda _name: None)
         self.on_profile_rename = on_profile_rename or (lambda _profile_id, _name: None)
@@ -484,6 +486,10 @@ class SettingsUI:
 
         self.voice_value = tk.StringVar()
         self.rate_value = tk.IntVar(value=settings["rate"])
+        self.reader_rate_value = tk.DoubleVar(value=settings.get("speech", {}).get("reader_playback_rate", 1.0))
+        self.reader_rate_label = tk.StringVar(value=f"{self.reader_rate_value.get():.1f}×")
+        self._reader_rate_after: str | None = None
+        self._setting_reader_rate = False
         self.volume_value = tk.IntVar(value=settings["volume"])
         speech_settings = settings.get("speech", {})
         capture_mode = speech_settings.get("capture_mode", "replace")
@@ -1163,8 +1169,17 @@ class SettingsUI:
         self.next_sentence_button = ttk.Button(transport, text="Next sentence", style="Compact.TButton",
                                                command=lambda: self._navigate_sentence(1), state="disabled")
         self.next_sentence_button.pack(side="left", padx=(6, 0))
+        self.reader_speed_controls = ttk.Frame(capture_actions, style="CardInner.TFrame")
+        self.reader_speed_controls.grid(row=0, column=1, sticky="w", padx=(16, 0))
+        ttk.Label(self.reader_speed_controls, text="Reading speed", style="CardText.TLabel").pack(side="left")
+        ttk.Scale(self.reader_speed_controls, from_=0.5, to=2.0, length=130,
+                  variable=self.reader_rate_value, command=self._reader_rate_moved).pack(side="left", padx=(8, 5))
+        ttk.Label(self.reader_speed_controls, textvariable=self.reader_rate_label,
+                  style="CardText.TLabel", width=5).pack(side="left")
+        ttk.Button(self.reader_speed_controls, text="1.0×", style="Compact.TButton",
+                   command=self._reset_reader_rate).pack(side="left", padx=(4, 0))
         trailing_actions = ttk.Frame(capture_actions, style="CardInner.TFrame")
-        trailing_actions.grid(row=0, column=1, sticky="e")
+        trailing_actions.grid(row=0, column=2, sticky="e")
         self._reader_trailing_actions = trailing_actions
         self._reader_actions_stacked = False
         capture_actions.bind("<Configure>", lambda event: self._reflow_reader_actions(event.width))
@@ -1176,19 +1191,61 @@ class SettingsUI:
         ttk.Button(trailing_actions, text="Copy", style="Compact.TButton", command=self.copy_text).pack(side="left", padx=(6, 0))
         self.reader_transport_hint = tk.StringVar(value="")
         ttk.Label(capture_actions, textvariable=self.reader_transport_hint,
-                  style="CardHint.TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
+                  style="CardHint.TLabel").grid(row=3, column=0, columnspan=3, sticky="w")
 
     def _reflow_reader_actions(self, width: int) -> None:
-        stacked = width < 880
+        stacked = width < 1250
         if stacked == self._reader_actions_stacked:
             return
         self._reader_actions_stacked = stacked
-        self._reader_trailing_actions.grid_configure(
+        self.reader_speed_controls.grid_configure(
             row=1 if stacked else 0,
             column=0 if stacked else 1,
+            sticky="w",
+            padx=(0, 0) if stacked else (16, 0),
+            pady=(6, 0) if stacked else (0, 0),
+        )
+        self._reader_trailing_actions.grid_configure(
+            row=2 if stacked else 0,
+            column=0 if stacked else 2,
             sticky="w" if stacked else "e",
             pady=(6, 0) if stacked else (0, 0),
         )
+
+    def _reader_rate_moved(self, value: str) -> None:
+        if self._setting_reader_rate:
+            return
+        rate = round(max(0.5, min(2.0, float(value))) * 10) / 10
+        self.reader_rate_label.set(f"{rate:.1f}×")
+        if self._reader_rate_after is not None:
+            self.root.after_cancel(self._reader_rate_after)
+        self._reader_rate_after = self.root.after(120, self._save_reader_rate)
+
+    def _reset_reader_rate(self) -> None:
+        if self._reader_rate_after is not None:
+            self.root.after_cancel(self._reader_rate_after)
+            self._reader_rate_after = None
+        self.set_reader_rate(1.0)
+        self._save_reader_rate()
+
+    def set_reader_rate(self, rate: float) -> None:
+        self._setting_reader_rate = True
+        try:
+            self.reader_rate_value.set(rate)
+            self.reader_rate_label.set(f"{rate:.1f}×")
+        finally:
+            self._setting_reader_rate = False
+
+    def _save_reader_rate(self) -> None:
+        self._reader_rate_after = None
+        rate = round(max(0.5, min(2.0, self.reader_rate_value.get())) * 10) / 10
+        source = self.captured_text.get("1.0", "end-1c")
+        try:
+            saved = self.on_reader_speed_changed(self._speech_highlight_owner, source, rate)
+        except Exception as exc:
+            saved = self.config.get().get("speech", {}).get("reader_playback_rate", 1.0)
+            self.set_status(f"Reader speed could not be saved: {exc}", error=True)
+        self.set_reader_rate(saved)
 
     def _build_ocr_tab(self, parent: ttk.Frame) -> None:
         automatic = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
@@ -2342,6 +2399,9 @@ class SettingsUI:
 
     def close(self) -> None:
         """Flush debounced settings before the native window is destroyed."""
+        if self._reader_rate_after is not None:
+            self.root.after_cancel(self._reader_rate_after)
+            self._save_reader_rate()
         if hasattr(self, "window_state"):
             self.window_state.close()
 

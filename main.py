@@ -103,6 +103,7 @@ class GameTextReaderApplication:
             on_document_started_with_id=self._speech_document_started,
             on_word_with_id=self._speech_word,
             on_playback_state_with_id=self._speech_playback_state,
+            on_reader_rate_result=self._reader_rate_result,
             initial_voice_id=settings["voice"],
             initial_capture_mode=settings.get("speech", {}).get("capture_mode", "replace"),
             initial_max_overlap=settings.get("speech", {}).get("max_overlap", 2),
@@ -122,6 +123,7 @@ class GameTextReaderApplication:
         self._capture_submit_lock = threading.Lock()
         self._manual_capture_pending = False
         self._auto_read_request_id: int | None = None
+        self._reader_current_id: int | None = None
         self.auto_read = AutoReadWatcher(
             self._grab_screen, self._submit_auto_image, self._auto_read_state,
             area_valid=self._auto_area_valid,
@@ -158,6 +160,7 @@ class GameTextReaderApplication:
             on_reader_play_pause=self.reader_play_pause,
             on_reader_navigate=self.navigate_reader_sentence,
             on_reader_invalidated=self.invalidate_reader_playback,
+            on_reader_speed_changed=self.set_reader_speed,
             on_review_result=self.accept_reviewed_result,
             on_profile_create=self.create_capture_profile,
             on_profile_rename=self.rename_capture_profile,
@@ -288,6 +291,8 @@ class GameTextReaderApplication:
     def _speech_finished(self, request_id: int, text: str) -> None:
         if request_id == getattr(self, "_auto_read_request_id", None):
             self._auto_read_request_id = None
+        if request_id == getattr(self, "_reader_current_id", None):
+            self._reader_current_id = None
         self.text_state.end_speech(text, request_id)
         self._schedule(lambda: self.ui.clear_speech_progress(request_id))
 
@@ -325,6 +330,23 @@ class GameTextReaderApplication:
         self._schedule(lambda: self.ui.set_reader_playback_state(
             request_id, source_text, paused, can_navigate
         ))
+
+    def _reader_rate_result(
+        self, request_id: int, source_text: str, requested: float, actual: float,
+    ) -> None:
+        def apply() -> None:
+            current = self.config.get()["speech"]["reader_playback_rate"]
+            if (request_id != getattr(self, "_reader_current_id", None)
+                    or source_text != self.text_state.last_successful_text
+                    or abs(current - requested) > 0.01):
+                return
+            if abs(actual - requested) > 0.01:
+                saved = self.config.update(speech={"reader_playback_rate": actual})["speech"]["reader_playback_rate"]
+                self.ui.set_reader_rate(saved)
+                self.ui.set_status(
+                    f"Windows could not play at {requested:.1f}×; kept {saved:.1f}×.", error=True
+                )
+        self._schedule(apply)
 
     def _apply_initial_hotkeys(self) -> None:
         settings = self.config.get()
@@ -578,6 +600,7 @@ class GameTextReaderApplication:
         self.auto_read.stop("Auto-Read stopped with audio.")
         self._auto_read_request_id = None
         self.tts.stop()
+        self._reader_current_id = None
         if hasattr(self, "text_state"):
             self.text_state.end_speech()
         if hasattr(self, "_timing_lock"):
@@ -599,8 +622,9 @@ class GameTextReaderApplication:
         if hasattr(self, "_timing_lock"):
             with self._timing_lock:
                 self._pending_speech_timing = None
-        replace = getattr(self.tts, "replace", None) or self.tts.speak
-        replace(document, settings["voice"], settings["rate"], settings["volume"])
+        ticket = self.tts.replace_reader(document, settings["voice"], settings["rate"], settings["volume"],
+                                         settings["speech"]["reader_playback_rate"])
+        self._reader_current_id = ticket.request_id
         self.ui.set_status("Reading the last captured text again.")
 
     def reader_play_pause(self, request_id: int | None, source_text: str, paused: bool) -> None:
@@ -615,24 +639,38 @@ class GameTextReaderApplication:
         if not document.spoken_text:
             return
         settings = self.config.get()
-        self.tts.play_reader(document, settings["voice"], settings["rate"], settings["volume"])
+        ticket = self.tts.play_reader(document, settings["voice"], settings["rate"], settings["volume"],
+                                      settings["speech"]["reader_playback_rate"])
+        self._reader_current_id = ticket.request_id
         self.ui.set_status("Reading the text in Last captured text.")
+
+    def set_reader_speed(self, request_id: int | None, source_text: str, rate: float) -> float:
+        saved = self.config.update(speech={"reader_playback_rate": rate})["speech"]["reader_playback_rate"]
+        if request_id is not None and source_text == self.text_state.last_successful_text:
+            self.tts.set_reader_playback_rate(request_id, source_text, saved)
+        return saved
 
     def navigate_reader_sentence(self, request_id: int, source_text: str, source_offset: int) -> None:
         if source_text != self.text_state.last_successful_text:
             return
         ticket = self.tts.navigate_reader(request_id, source_text, source_offset)
         if ticket is not None:
+            if request_id == self._reader_current_id:
+                self._reader_current_id = ticket.request_id
             self.ui.set_status("Moving to the selected sentence.")
 
     def invalidate_reader_playback(self, request_id: int) -> None:
         self.tts.cancel_request(request_id)
+        if request_id == self._reader_current_id:
+            self._reader_current_id = None
 
     def seek_reader(self, request_id: int, source_text: str, source_offset: int) -> None:
         if source_text != self.text_state.last_successful_text:
             return
         ticket = self.tts.seek_to_source(request_id, source_text, source_offset)
         if ticket is not None:
+            if request_id == self._reader_current_id:
+                self._reader_current_id = ticket.request_id
             self.ui.set_status('Continuing from the selected word.')
 
     def accept_reviewed_result(self, result: CorrectionResult) -> None:

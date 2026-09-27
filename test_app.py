@@ -618,7 +618,8 @@ class WindowsComponentTests(unittest.TestCase):
             ui.capture_speech_value.set("Allow overlapping lines")
             ui.capture_overlap_value.set(3)
             ui._save_capture_speech_settings()
-            self.assertEqual(store.get()["speech"], {"capture_mode": "overlap", "max_overlap": 3})
+            self.assertEqual(store.get()["speech"], {"capture_mode": "overlap", "max_overlap": 3,
+                                                      "reader_playback_rate": 1.0})
         finally:
             root.destroy()
             path.unlink(missing_ok=True)
