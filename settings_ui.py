@@ -546,6 +546,8 @@ class SettingsUI:
         self._updating_captured_text = False
         self._markdown_mode = False
         self._reader_paste_before = ''
+        self._preview_open_after: str | None = None
+        self._preview_sync_after: str | None = None
         self._speech_highlight_owner: int | None = None
         self._reader_paused = False
         self._reader_can_navigate = False
@@ -1004,6 +1006,7 @@ class SettingsUI:
         self.hotkey_badge.grid(row=1, column=1, sticky="e", pady=(9, 0))
 
         quick = ttk.Frame(outer, style="Card.TFrame", padding=(16, 13))
+        self.quick_actions_card = quick
         quick.pack(fill="x", pady=(0, 12))
         quick.columnconfigure(0, weight=1)
         quick_copy = ttk.Frame(quick, style="CardInner.TFrame")
@@ -1025,13 +1028,15 @@ class SettingsUI:
         self.notebook.add(ocr_tab, text="OCR corrections")
         self.notebook.add(settings_tab, text="Voice & shortcuts")
         reader_tab.columnconfigure(0, weight=1)
-        reader_tab.rowconfigure(1, weight=1)
+        reader_tab.rowconfigure(0, weight=1)
         ocr_tab.columnconfigure(0, weight=1)
         ocr_tab.rowconfigure(1, weight=1)
 
         self._build_reader_tab(reader_tab)
         self._build_ocr_tab(ocr_tab)
         self._build_settings_tab(self._make_scrollable_tab(settings_tab))
+        self.notebook.bind("<<NotebookTabChanged>>", self._main_tab_changed, add="+")
+        self.root.after_idle(self._main_tab_changed)
 
         status_bar = ttk.Frame(outer, style="Status.TFrame", padding=(2, 10, 2, 0))
         status_bar.pack(fill="x")
@@ -1058,78 +1063,103 @@ class SettingsUI:
         return content
 
     def _build_reader_tab(self, parent: ttk.Frame) -> None:
-        box_card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
-        box_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        workspace = ttk.Frame(parent, style="App.TFrame")
+        workspace.grid(row=0, column=0, sticky="nsew")
+        workspace.columnconfigure(1, weight=1)
+        workspace.rowconfigure(0, weight=1)
+        self.reader_workspace = workspace
+        self._reader_sidebar_open = True
+        self._reader_narrow: bool | None = None
+        self._reader_sidebar_width = round(315 * max(1.0, float(self.root.winfo_fpixels("1i")) / 96.0))
+        workspace.columnconfigure(0, minsize=self._reader_sidebar_width)
+        sidebar = ttk.Frame(workspace, style="Card.TFrame", padding=(14, 12))
+        sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        sidebar.columnconfigure(0, weight=1)
+        sidebar.rowconfigure(1, weight=1)
+        self.reader_sidebar = sidebar
+        ttk.Label(sidebar, text="Capture area", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        sidebar_canvas = tk.Canvas(sidebar, bg=self._palette.card, highlightthickness=0, borderwidth=0)
+        sidebar_scrollbar = ttk.Scrollbar(sidebar, orient="vertical", command=sidebar_canvas.yview)
+        sidebar_canvas.configure(yscrollcommand=sidebar_scrollbar.set)
+        sidebar_canvas.grid(row=1, column=0, sticky="nsew")
+        sidebar_scrollbar.grid(row=1, column=1, sticky="ns")
+        sidebar_content = ttk.Frame(sidebar_canvas, style="CardInner.TFrame")
+        sidebar_window = sidebar_canvas.create_window((0, 0), window=sidebar_content, anchor="nw")
+        sidebar_content.bind("<Configure>", lambda _event: sidebar_canvas.configure(scrollregion=sidebar_canvas.bbox("all")))
+        sidebar_canvas.bind("<Configure>", lambda event: sidebar_canvas.itemconfigure(sidebar_window, width=event.width))
+        sidebar_canvas.bind("<MouseWheel>", lambda event: sidebar_canvas.yview_scroll(int(-event.delta / 120), "units"))
+        self.reader_sidebar_canvas = sidebar_canvas
+        box_card = ttk.Frame(sidebar_content, style="CardInner.TFrame")
+        box_card.pack(fill="x")
         box_card.columnconfigure(0, weight=1)
-        ttk.Label(box_card, text="Capture area", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
-        box_actions = ttk.Frame(box_card, style="CardInner.TFrame")
-        box_actions.grid(row=0, column=1, sticky="e", padx=(12, 0))
-        ttk.Button(box_actions, text="Set capture area", command=self.on_draw_box).pack(side="left")
-        ttk.Button(box_actions, text="Read now", style="Primary.TButton", command=self._read_now).pack(side="left", padx=(7, 0))
-        self.auto_read_button = ttk.Button(box_actions, text="Start Auto-Read", command=self.on_toggle_auto_read)
-        self.auto_read_button.pack(side="left", padx=(7, 0))
-
-        profile_row = ttk.Frame(box_card, style="CardInner.TFrame")
-        profile_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        profile_row.columnconfigure(1, weight=1)
-        ttk.Label(profile_row, text="Profile", style="CardText.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(box_card, text="Profile", style="CardText.TLabel").grid(row=0, column=0, sticky="w")
         self.profile_combo = self._register_combobox(
-            ttk.Combobox(profile_row, textvariable=self.profile_value, state="readonly")
+            ttk.Combobox(box_card, textvariable=self.profile_value, state="readonly")
         )
-        self.profile_combo.grid(row=0, column=1, sticky="ew")
+        self.profile_combo.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.profile_combo.bind("<<ComboboxSelected>>", self._profile_selected)
-        profile_actions = ttk.Frame(profile_row, style="CardInner.TFrame")
-        profile_actions.grid(row=0, column=2, sticky="e", padx=(8, 0))
+        profile_actions = ttk.Frame(box_card, style="CardInner.TFrame")
+        profile_actions.grid(row=2, column=0, sticky="ew", pady=(6, 12))
         ttk.Button(profile_actions, text="New", style="Compact.TButton", command=self.create_profile).pack(side="left")
         ttk.Button(profile_actions, text="Rename", style="Compact.TButton", command=self.rename_profile).pack(side="left", padx=(5, 0))
         ttk.Button(profile_actions, text="Delete", style="Compact.TButton", command=self.delete_profile).pack(side="left", padx=(5, 0))
-        extraction_row = ttk.Frame(box_card, style="CardInner.TFrame")
-        extraction_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(9, 0))
-        ttk.Label(extraction_row, text="Text extraction", style="CardText.TLabel").pack(side="left", padx=(0, 8))
+        ttk.Button(box_card, text="Set capture area", command=self.on_draw_box).grid(row=3, column=0, sticky="ew", pady=(0, 5))
+        ttk.Button(box_card, text="Read fixed box", style="Primary.TButton", command=self._read_now).grid(row=4, column=0, sticky="ew", pady=(0, 5))
+        ttk.Button(box_card, text="Select a snippet", command=self._select_area).grid(row=5, column=0, sticky="ew", pady=(0, 5))
+        self.auto_read_button = ttk.Button(box_card, text="Start Auto-Read", command=self.on_toggle_auto_read)
+        self.auto_read_button.grid(row=6, column=0, sticky="ew", pady=(0, 5))
+        ttk.Button(box_card, text="Stop audio", command=self.stop_speech).grid(row=7, column=0, sticky="ew", pady=(0, 12))
+        ttk.Label(box_card, text="Text extraction", style="CardText.TLabel").grid(row=8, column=0, sticky="w")
         self.recognition_mode_combo = self._register_combobox(
-            ttk.Combobox(extraction_row, textvariable=self.recognition_mode,
+            ttk.Combobox(box_card, textvariable=self.recognition_mode,
                          values=("Standard", "Enhanced"), state="readonly", width=14)
         )
-        self.recognition_mode_combo.pack(side="left")
+        self.recognition_mode_combo.grid(row=9, column=0, sticky="ew", pady=(4, 0))
         self.recognition_mode_combo.bind("<<ComboboxSelected>>", self._recognition_mode_changed)
-        ttk.Label(extraction_row, text="Enhanced adapts difficult images and may take longer.",
-                  style="CardHint.TLabel").pack(side="left", padx=(12, 0))
-        speed_row = ttk.Frame(box_card, style="CardInner.TFrame")
-        speed_row.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Label(speed_row, text="Auto-Read speed", style="CardText.TLabel").pack(side="left", padx=(0, 8))
+        ttk.Label(box_card, text="Enhanced adapts difficult images and may take longer.",
+                  style="CardHint.TLabel", wraplength=270, justify="left").grid(row=10, column=0, sticky="w", pady=(3, 12))
+        ttk.Label(box_card, text="Auto-Read speed", style="CardText.TLabel").grid(row=11, column=0, sticky="w")
         self.auto_read_speed_combo = self._register_combobox(
             ttk.Combobox(
-                speed_row,
+                box_card,
                 textvariable=self.auto_read_speed,
                 values=("Normal", "Fast", "Instant"),
                 state="readonly",
                 width=12,
             )
         )
-        self.auto_read_speed_combo.pack(side="left")
+        self.auto_read_speed_combo.grid(row=12, column=0, sticky="ew", pady=(4, 0))
         self.auto_read_speed_combo.bind(
             "<<ComboboxSelected>>", self._auto_read_speed_changed
         )
         ttk.Label(
-            speed_row,
+            box_card,
             text=("Fast keeps two OCR confirmations. Instant reads the first usable result, "
                   "then safely cancels and restarts if typewriter text is still growing."),
             style="CardHint.TLabel",
-        ).pack(side="left", padx=(12, 0))
-        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold")).grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.", style="CardHint.TLabel").grid(row=5, column=0, columnspan=2, sticky="w", pady=(3, 0))
-        ttk.Label(box_card, textvariable=self.auto_read_status, style="CardHint.TLabel", wraplength=680).grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(3, 0)
+            wraplength=270, justify="left",
+        ).grid(row=13, column=0, sticky="w", pady=(3, 10))
+        ttk.Label(box_card, textvariable=self.box_value, style="CardText.TLabel", font=("Segoe UI", 10, "bold"),
+                  wraplength=270, justify="left").grid(row=14, column=0, sticky="w")
+        ttk.Label(box_card, text="The fixed shortcut uses the selected profile without bringing settings forward.",
+                  style="CardHint.TLabel", wraplength=270, justify="left").grid(row=15, column=0, sticky="w", pady=(3, 0))
+        ttk.Label(box_card, textvariable=self.auto_read_status, style="CardHint.TLabel", wraplength=270, justify="left").grid(
+            row=16, column=0, sticky="w", pady=(5, 0)
         )
+        self._bind_reader_sidebar_wheel(sidebar_content)
 
-        captured = ttk.Frame(parent, style="Card.TFrame", padding=(16, 14))
-        captured.grid(row=1, column=0, sticky="nsew")
+        captured = ttk.Frame(workspace, style="Card.TFrame", padding=(16, 14))
+        captured.grid(row=0, column=1, sticky="nsew")
         captured.columnconfigure(0, weight=1)
-        captured.rowconfigure(3, weight=1)
+        captured.rowconfigure(2, weight=1)
         ttk.Label(captured, text="Last captured text", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(captured, textvariable=self.capture_meta, style="CardHint.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 8))
+        self.capture_controls_button = ttk.Button(captured, text="Capture controls", style="Compact.TButton",
+                                                  command=self._toggle_reader_sidebar)
+        self.capture_controls_button.grid(row=0, column=1, sticky="e")
+        self.capture_controls_button.grid_remove()
         self.reader_tabs = ttk.Notebook(captured)
-        self.reader_tabs.grid(row=3, column=0, columnspan=2, sticky='nsew')
+        self.reader_tabs.grid(row=2, column=0, columnspan=2, sticky='nsew')
         self.captured_text_frame = ttk.Frame(self.reader_tabs, style="CardInner.TFrame")
         self.reader_tabs.add(self.captured_text_frame, text='Edit')
         self.reader_preview_frame = ttk.Frame(self.reader_tabs, style='CardInner.TFrame')
@@ -1138,6 +1168,8 @@ class SettingsUI:
         self.reader_tabs.add(self.reader_preview_frame, text='Preview')
         preview_actions = ttk.Frame(self.reader_preview_frame, style='CardInner.TFrame')
         preview_actions.grid(row=0, column=0, sticky='ew', padx=6, pady=4)
+        self.preview_actions = preview_actions
+        preview_actions.grid_remove()
         self.load_markdown_images = ttk.Button(
             preview_actions, text='Load remote images', style='Compact.TButton',
             command=self._load_reader_images, state='disabled',
@@ -1150,6 +1182,7 @@ class SettingsUI:
         preview_host.columnconfigure(0, weight=1)
         preview_host.rowconfigure(0, weight=1)
         self.markdown_preview = MarkdownPreview(preview_host)
+        preview_host.bind("<Configure>", self._queue_preview_layout_sync)
         self.reader_tabs.bind('<<NotebookTabChanged>>', self._reader_tab_changed)
         self.captured_text_frame.columnconfigure(0, weight=1)
         self.captured_text_frame.rowconfigure(0, weight=1)
@@ -1180,7 +1213,7 @@ class SettingsUI:
         self.captured_text.bind('<Shift-F10>', self._reader_context_menu)
         self.captured_text.edit_modified(False)
         capture_actions = ttk.Frame(captured, style="CardInner.TFrame")
-        capture_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        capture_actions.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         capture_actions.columnconfigure(1, weight=1)
         transport = ttk.Frame(capture_actions, style="CardInner.TFrame")
         transport.grid(row=0, column=0, sticky="w")
@@ -1205,7 +1238,7 @@ class SettingsUI:
         trailing_actions = ttk.Frame(capture_actions, style="CardInner.TFrame")
         trailing_actions.grid(row=0, column=2, sticky="e")
         self._reader_trailing_actions = trailing_actions
-        self._reader_actions_stacked = False
+        self._reader_actions_layout: str | None = None
         capture_actions.bind("<Configure>", lambda event: self._reflow_reader_actions(event.width))
         self.read_again_button = ttk.Button(trailing_actions, text="Read Again", style="Primary.TButton", command=self.on_read_again, state="disabled")
         self.read_again_button.pack(side="left", padx=(0, 6))
@@ -1216,24 +1249,81 @@ class SettingsUI:
         self.reader_transport_hint = tk.StringVar(value="")
         ttk.Label(capture_actions, textvariable=self.reader_transport_hint,
                   style="CardHint.TLabel").grid(row=3, column=0, columnspan=3, sticky="w")
+        workspace.bind("<Configure>", lambda event: self._layout_reader_workspace(event.width))
+        self.root.after_idle(lambda: self._layout_reader_workspace(workspace.winfo_width()))
+
+    def _main_tab_changed(self, _event: object | None = None) -> None:
+        """Keep the shared quick actions on settings tabs, not above the Reader rail."""
+        if not hasattr(self, "quick_actions_card"):
+            return
+        reader_selected = self.notebook.select() == str(self.reader_workspace.master)
+        if reader_selected and self.quick_actions_card.winfo_manager():
+            self.quick_actions_card.pack_forget()
+        elif not reader_selected and not self.quick_actions_card.winfo_manager():
+            self.quick_actions_card.pack(fill="x", pady=(0, 12), before=self.notebook)
+
+    def _bind_reader_sidebar_wheel(self, widget: tk.Widget) -> None:
+        if not isinstance(widget, ttk.Combobox):
+            widget.bind("<MouseWheel>", self._reader_sidebar_wheel, add="+")
+        for child in widget.winfo_children():
+            self._bind_reader_sidebar_wheel(child)
+
+    def _reader_sidebar_wheel(self, event: tk.Event) -> str:
+        self.reader_sidebar_canvas.yview_scroll(int(-event.delta / 120), "units")
+        return "break"
+
+    def _layout_reader_workspace(self, width: int) -> None:
+        if not hasattr(self, "capture_controls_button") or width < 100:
+            return
+        try:
+            dpi_scale = max(1.0, float(self.root.winfo_fpixels("1i")) / 96.0)
+        except (tk.TclError, TypeError, ValueError):
+            dpi_scale = 1.0
+        narrow = width < round(1050 * dpi_scale)
+        if self._reader_narrow is None or narrow != self._reader_narrow:
+            self._reader_narrow = narrow
+            self._reader_sidebar_open = not narrow
+            self._show_reader_sidebar()
+
+    def _toggle_reader_sidebar(self) -> None:
+        self._reader_sidebar_open = not self._reader_sidebar_open
+        self._show_reader_sidebar()
+
+    def _show_reader_sidebar(self) -> None:
+        if self._reader_sidebar_open:
+            self.reader_workspace.columnconfigure(0, minsize=self._reader_sidebar_width)
+            if not self.reader_sidebar.winfo_manager():
+                self.reader_sidebar.grid()
+        else:
+            if self.reader_sidebar.winfo_manager():
+                self.reader_sidebar.grid_remove()
+            self.reader_workspace.columnconfigure(0, minsize=0)
+        if self._reader_narrow:
+            self.capture_controls_button.configure(
+                text="Hide capture controls" if self._reader_sidebar_open else "Capture controls")
+            self.capture_controls_button.grid()
+        else:
+            self.capture_controls_button.grid_remove()
 
     def _reflow_reader_actions(self, width: int) -> None:
-        stacked = width < 1250
-        if stacked == self._reader_actions_stacked:
+        layout = "small" if width < 850 else ("medium" if width < 1250 else "wide")
+        if layout == self._reader_actions_layout:
             return
-        self._reader_actions_stacked = stacked
+        self._reader_actions_layout = layout
+        small = layout == "small"
         self.reader_speed_controls.grid_configure(
-            row=1 if stacked else 0,
-            column=0 if stacked else 1,
+            row=1 if small else 0,
+            column=0 if small else 1,
             sticky="w",
-            padx=(0, 0) if stacked else (16, 0),
-            pady=(6, 0) if stacked else (0, 0),
+            padx=(0, 0) if small else (16, 0),
+            pady=(6, 0) if small else (0, 0),
         )
         self._reader_trailing_actions.grid_configure(
-            row=2 if stacked else 0,
-            column=0 if stacked else 2,
-            sticky="w" if stacked else "e",
-            pady=(6, 0) if stacked else (0, 0),
+            row=2 if small else (1 if layout == "medium" else 0),
+            column=0 if layout != "wide" else 2,
+            columnspan=2 if layout == "medium" else 1,
+            sticky="w" if layout != "wide" else "e",
+            pady=(6, 0) if layout != "wide" else (0, 0),
         )
 
     def _reader_rate_moved(self, value: str) -> None:
@@ -1550,6 +1640,8 @@ class SettingsUI:
 
     def _apply_tk_colours(self, palette: ThemePalette) -> None:
         self.root.configure(bg=palette.window)
+        if hasattr(self, "reader_sidebar_canvas"):
+            self.reader_sidebar_canvas.configure(bg=palette.card)
         if (hasattr(self, 'reader_tabs')
                 and self.reader_tabs.select() == str(self.reader_preview_frame)):
             self.markdown_preview.set_document(
@@ -2126,10 +2218,33 @@ class SettingsUI:
         if self.reader_tabs.select() != str(self.reader_preview_frame):
             return
         self._markdown_mode = True
+        if self._preview_open_after is not None:
+            self.root.after_cancel(self._preview_open_after)
+        self._preview_open_after = self.root.after_idle(self._open_reader_preview)
+
+    def _open_reader_preview(self) -> None:
+        self._preview_open_after = None
+        if self.reader_tabs.select() != str(self.reader_preview_frame):
+            return
+        self.reader_preview_frame.update_idletasks()
         source = self.captured_text.get('1.0', 'end-1c')
         has_images = self.markdown_preview.set_document(
             source, 'dark' if self._palette.dark else 'light')
         self.load_markdown_images.configure(state='normal' if has_images else 'disabled')
+        if has_images:
+            self.preview_actions.grid()
+        else:
+            self.preview_actions.grid_remove()
+        self._queue_preview_layout_sync()
+
+    def _queue_preview_layout_sync(self, _event: object | None = None) -> None:
+        if self._preview_sync_after is None:
+            self._preview_sync_after = self.root.after_idle(self._sync_preview_layout)
+
+    def _sync_preview_layout(self) -> None:
+        self._preview_sync_after = None
+        if self.reader_tabs.select() == str(self.reader_preview_frame):
+            self.markdown_preview.sync_layout()
 
     def _load_reader_images(self) -> None:
         self.markdown_preview.load_images()
@@ -2471,6 +2586,12 @@ class SettingsUI:
 
     def close(self) -> None:
         """Flush debounced settings before the native window is destroyed."""
+        if self._preview_open_after is not None:
+            self.root.after_cancel(self._preview_open_after)
+            self._preview_open_after = None
+        if self._preview_sync_after is not None:
+            self.root.after_cancel(self._preview_sync_after)
+            self._preview_sync_after = None
         if hasattr(self, 'markdown_preview'):
             self.markdown_preview.close()
         if self._reader_rate_after is not None:

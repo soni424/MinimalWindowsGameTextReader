@@ -83,7 +83,6 @@ class MarkdownPreview:
                 ) else None,
                 on_creation_failed=lambda error: self._failed(str(error)),
             )
-            self.web.grid(row=0, column=0, sticky='nsew')
             self._startup_timeout = self.parent.after(12000, self._timed_out)
         except Exception as exc:
             self._failed(str(exc))
@@ -117,6 +116,16 @@ class MarkdownPreview:
         self.error.set('')
         self.message.grid_remove()
         self.refresh()
+        self.parent.after_idle(self.sync_layout)
+
+    def sync_layout(self) -> None:
+        """Resync the native WebView after a Notebook or host layout change."""
+        if self.web is not None:
+            try:
+                self.web.sync_bounds()
+            except (RuntimeError, OSError, tk.TclError):
+                # The native view may still be initializing or closing.
+                pass
 
     def set_document(self, source: str, theme: str) -> bool:
         if source != self.source:

@@ -3,7 +3,7 @@ import unittest
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import tkinter as tk
 
 from config import ConfigStore
@@ -174,6 +174,102 @@ class MarkdownReaderUiTests(unittest.TestCase):
             self.assertIn('preview is unavailable', self.ui.markdown_preview.error.get())
             self.ui.reader_tabs.select(self.ui.captured_text_frame)
             self.assertEqual(self.ui.captured_text.get('1.0', 'end-1c'), '# Safe text')
+
+    def test_preview_viewport_fills_reader_after_switch(self):
+        self.root.deiconify()
+        self.root.geometry('1500x900+40+40')
+        self.ui.captured_text.insert('1.0', '# Heading\n\nA paragraph to preview.')
+        with patch.object(self.ui.markdown_preview, 'set_document', return_value=False):
+            self.ui.reader_tabs.select(self.ui.reader_preview_frame)
+            self.root.update()
+        host = self.ui.markdown_preview.parent
+        self.assertGreater(host.winfo_height(), 300, (
+            f'root={self.root.winfo_width()}x{self.root.winfo_height()} '
+            f'reader={self.ui.reader_tabs.master.master.winfo_height()} '
+            f'card={self.ui.reader_tabs.master.winfo_height()} '
+            f'notebook={self.ui.reader_tabs.winfo_width()}x{self.ui.reader_tabs.winfo_height()} '
+            f'page={self.ui.reader_preview_frame.winfo_width()}x{self.ui.reader_preview_frame.winfo_height()} '
+            f'host={host.winfo_width()}x{host.winfo_height()}'
+        ))
+        self.assertGreaterEqual(host.winfo_height(), self.ui.reader_tabs.winfo_height() * 0.7)
+        self.assertGreaterEqual(host.winfo_width(), self.ui.reader_tabs.winfo_width() * 0.8)
+
+    def test_split_reader_sidebar_collapses_and_other_tabs_keep_quick_actions(self):
+        self.root.deiconify()
+        self.root.geometry('1500x900+40+40')
+        self.root.update()
+        scale = max(1.0, float(self.root.winfo_fpixels('1i')) / 96.0)
+        self.ui._layout_reader_workspace(round(1300 * scale))
+        self.root.update_idletasks()
+        self.assertFalse(self.ui.quick_actions_card.winfo_manager())
+        self.assertTrue(self.ui.reader_sidebar.winfo_ismapped())
+        self.assertFalse(self.ui.capture_controls_button.winfo_ismapped())
+        self.assertGreater(self.ui.reader_tabs.winfo_width(), self.ui.reader_sidebar.winfo_width())
+
+        self.root.geometry('850x720+40+40')
+        self.root.update()
+        self.assertFalse(self.ui.reader_sidebar.winfo_ismapped())
+        self.assertTrue(self.ui.capture_controls_button.winfo_ismapped())
+        self.ui.capture_controls_button.invoke()
+        self.root.update()
+        self.assertTrue(self.ui.reader_sidebar.winfo_ismapped())
+        self.assertEqual(self.ui.capture_controls_button.cget('text'), 'Hide capture controls')
+
+        self.ui.notebook.select(1)
+        self.root.update()
+        self.assertTrue(self.ui.quick_actions_card.winfo_ismapped())
+        self.ui.notebook.select(0)
+        self.root.update()
+        self.assertFalse(self.ui.quick_actions_card.winfo_manager())
+
+    def test_capture_sidebar_scrolls_and_follows_appearance(self):
+        self.root.deiconify()
+        self.root.geometry('1500x720+40+40')
+        self.root.update()
+        scale = max(1.0, float(self.root.winfo_fpixels('1i')) / 96.0)
+        self.ui._layout_reader_workspace(round(1300 * scale))
+        self.root.update_idletasks()
+        canvas = self.ui.reader_sidebar_canvas
+        self.assertTrue(self.ui.reader_sidebar.winfo_ismapped())
+        self.assertLess(canvas.yview()[1], 1.0)
+        canvas.yview_moveto(1.0)
+        self.root.update()
+        self.assertGreater(canvas.yview()[0], 0.0)
+        for appearance in ('Dark', 'Light'):
+            self.ui.theme_value.set(appearance)
+            self.ui._theme_changed()
+            self.assertEqual(canvas.cget('bg'), self.ui._palette.card)
+
+    def test_preview_resyncs_native_bounds_after_layout_changes(self):
+        self.root.deiconify()
+        self.root.geometry('1500x900+40+40')
+        native = SimpleNamespace(sync_bounds=Mock(), destroy=lambda: None)
+        self.ui.markdown_preview.web = native
+        with patch.object(self.ui.markdown_preview, 'set_document', return_value=False):
+            self.ui.reader_tabs.select(self.ui.reader_preview_frame)
+            self.root.update()
+            self.assertTrue(native.sync_bounds.called)
+            native.sync_bounds.reset_mock()
+            self.root.geometry('1300x800+40+40')
+            self.root.update()
+            self.assertTrue(native.sync_bounds.called)
+
+    def test_webview_does_not_move_preview_host_out_of_expanding_row(self):
+        class HostWebView:
+            def __init__(self, frame, **_kwargs):
+                self.frame = frame
+
+            def grid(self, **kwargs):
+                self.frame.grid(**kwargs)
+
+            def destroy(self):
+                pass
+
+        host = self.ui.markdown_preview.parent
+        self.assertEqual(host.grid_info()['row'], 1)
+        with patch('tkwry.WebView', HostWebView):
+            self.ui.markdown_preview.ensure_open()
+        self.assertEqual(host.grid_info()['row'], 1)
 
 
 if __name__ == '__main__':

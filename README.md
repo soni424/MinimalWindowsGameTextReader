@@ -104,6 +104,8 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## Use
 
+On wide windows, the **Reader** places profiles, capture buttons, OCR mode, and Auto-Read controls in a scrollable panel on the left. The text editor or Markdown preview fills the right side, with playback controls below it. In a narrow window the capture panel closes automatically; select **Capture controls** to reopen it. Quick actions remain available above the OCR corrections and Voice & shortcuts tabs.
+
 1. Choose an installed Windows voice, speed, and volume.
 2. In **Capture area**, create or select a game profile, then select **Set capture area**. Drag inside the outlined area to move it, drag a handle to resize it, or drag elsewhere on either screen to draw a new area. The controls follow the capture monitor. Use the arrow keys to move the box by 1 px (Shift+arrows: 10 px), **Enter** to save, or **Esc** to cancel. Choose **Text extraction: Standard** for existing behavior or **Enhanced** for difficult fonts.
 3. Press the Fixed Box hotkey (default `Alt+Z`) to OCR and read the selected profile's area.
@@ -150,7 +152,7 @@ Correction debug logging is optional. When enabled, a size-limited `ocr_debug.lo
 
 - Choose **System**, **Dark**, or **Light** from the Appearance menu. The preference is saved automatically.
 - Profile prompts, confirmation dialogs, combo boxes, and open drop-down lists follow the active appearance. Newly opened dialogs also follow appearance changes made while the app is running.
-- The **Reader** tab keeps the fixed box, latest OCR text, and copy controls together.
+- The **Reader** tab gives the latest text most of the window while keeping fixed-box capture and Auto-Read in a scrollable sidebar. Edit and Preview use the full reading pane, including after resizing or maximizing.
 - The **OCR corrections** tab contains correction strength, replacements, and protected game terms.
 - The **Voice & shortcuts** tab contains speech controls and global shortcut setup. On wide or maximized windows, the two cards use side-by-side columns; they stack automatically when the window is narrower.
 - Enable **Launch when I sign in to Windows** in that tab to start quietly in the system tray with global shortcuts ready. It applies to the current Windows account and does not require administrator access.
