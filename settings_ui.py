@@ -16,6 +16,8 @@ from config import ConfigStore
 from app_version import version_label
 from hotkey_manager import HotkeyError, normalise_hotkey
 from ocr_correction import CorrectionResult
+from markdown_preview import MarkdownPreview
+from markdown_reader import looks_like_markdown, prepare_markdown_for_speech, render_markdown
 from speech_text import prepare_for_speech
 from tts_engine import TtsEngine, Voice
 from window_state import WindowStateController
@@ -542,6 +544,8 @@ class SettingsUI:
         self._protected_words = list(ocr_settings["protected_words"])
         self._last_result: CorrectionResult | None = None
         self._updating_captured_text = False
+        self._markdown_mode = False
+        self._reader_paste_before = ''
         self._speech_highlight_owner: int | None = None
         self._reader_paused = False
         self._reader_can_navigate = False
@@ -1124,10 +1128,29 @@ class SettingsUI:
         captured.rowconfigure(3, weight=1)
         ttk.Label(captured, text="Last captured text", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(captured, textvariable=self.capture_meta, style="CardHint.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 8))
-        self.captured_text_frame = ttk.Frame(captured, style="CardInner.TFrame")
-        self.captured_text_frame.grid(
-            row=3, column=0, columnspan=2, sticky="nsew"
+        self.reader_tabs = ttk.Notebook(captured)
+        self.reader_tabs.grid(row=3, column=0, columnspan=2, sticky='nsew')
+        self.captured_text_frame = ttk.Frame(self.reader_tabs, style="CardInner.TFrame")
+        self.reader_tabs.add(self.captured_text_frame, text='Edit')
+        self.reader_preview_frame = ttk.Frame(self.reader_tabs, style='CardInner.TFrame')
+        self.reader_preview_frame.columnconfigure(0, weight=1)
+        self.reader_preview_frame.rowconfigure(1, weight=1)
+        self.reader_tabs.add(self.reader_preview_frame, text='Preview')
+        preview_actions = ttk.Frame(self.reader_preview_frame, style='CardInner.TFrame')
+        preview_actions.grid(row=0, column=0, sticky='ew', padx=6, pady=4)
+        self.load_markdown_images = ttk.Button(
+            preview_actions, text='Load remote images', style='Compact.TButton',
+            command=self._load_reader_images, state='disabled',
         )
+        self.load_markdown_images.pack(side='left')
+        ttk.Label(preview_actions, text='Images load only after you approve this document.',
+                  style='CardHint.TLabel').pack(side='left', padx=(10, 0))
+        preview_host = ttk.Frame(self.reader_preview_frame, style='CardInner.TFrame')
+        preview_host.grid(row=1, column=0, sticky='nsew')
+        preview_host.columnconfigure(0, weight=1)
+        preview_host.rowconfigure(0, weight=1)
+        self.markdown_preview = MarkdownPreview(preview_host)
+        self.reader_tabs.bind('<<NotebookTabChanged>>', self._reader_tab_changed)
         self.captured_text_frame.columnconfigure(0, weight=1)
         self.captured_text_frame.rowconfigure(0, weight=1)
         self.captured_text = tk.Text(
@@ -1151,6 +1174,7 @@ class SettingsUI:
         self.captured_text.grid(row=0, column=0, sticky="nsew")
         self.captured_scrollbar.grid(row=0, column=1, sticky="ns")
         self.captured_text.bind("<<Modified>>", self._captured_text_modified)
+        self.captured_text.bind('<<Paste>>', self._reader_paste, add='+')
         self.captured_text.bind('<Button-3>', self._reader_context_menu)
         self.captured_text.bind('<Double-Button-1>', self._reader_double_click)
         self.captured_text.bind('<Shift-F10>', self._reader_context_menu)
@@ -1526,6 +1550,12 @@ class SettingsUI:
 
     def _apply_tk_colours(self, palette: ThemePalette) -> None:
         self.root.configure(bg=palette.window)
+        if (hasattr(self, 'reader_tabs')
+                and self.reader_tabs.select() == str(self.reader_preview_frame)):
+            self.markdown_preview.set_document(
+                self.captured_text.get('1.0', 'end-1c'),
+                'dark' if palette.dark else 'light',
+            )
         if hasattr(self, "captured_text"):
             self.captured_text.configure(
                 bg=palette.input,
@@ -2077,6 +2107,38 @@ class SettingsUI:
             self.captured_text.edit_modified(False)
         finally:
             self._updating_captured_text = False
+        self._markdown_mode = False
+        if hasattr(self, 'reader_tabs'):
+            self.reader_tabs.select(self.captured_text_frame)
+            self.markdown_preview.clear_highlight()
+
+    def _reader_paste(self, _event: object) -> None:
+        self._reader_paste_before = self.captured_text.get('1.0', 'end-1c')
+        self.root.after_idle(self._after_reader_paste)
+
+    def _after_reader_paste(self) -> None:
+        current = self.captured_text.get('1.0', 'end-1c')
+        if current != self._reader_paste_before and looks_like_markdown(current):
+            self._markdown_mode = True
+            self.reader_tabs.select(self.reader_preview_frame)
+
+    def _reader_tab_changed(self, _event: object | None = None) -> None:
+        if self.reader_tabs.select() != str(self.reader_preview_frame):
+            return
+        self._markdown_mode = True
+        source = self.captured_text.get('1.0', 'end-1c')
+        has_images = self.markdown_preview.set_document(
+            source, 'dark' if self._palette.dark else 'light')
+        self.load_markdown_images.configure(state='normal' if has_images else 'disabled')
+
+    def _load_reader_images(self) -> None:
+        self.markdown_preview.load_images()
+        self.load_markdown_images.configure(state='disabled')
+
+    def prepare_reader_document(self, source: str):
+        if self._markdown_mode and source == self.captured_text.get('1.0', 'end-1c'):
+            return prepare_markdown_for_speech(source)
+        return prepare_for_speech(source)
 
     def _captured_text_modified(self, _event: object | None = None) -> None:
         """Promote typed or pasted editor contents to the current replay text."""
@@ -2092,6 +2154,8 @@ class SettingsUI:
         self.clear_speech_progress()
         editor_text = self.captured_text.get("1.0", "end-1c")
         text = editor_text.strip()
+        if self._markdown_mode and not looks_like_markdown(editor_text):
+            self._markdown_mode = False
         self._last_result = None
         if hasattr(self, "details_button"):
             self.details_button.configure(state="disabled")
@@ -2127,6 +2191,7 @@ class SettingsUI:
         self._reader_can_navigate = False
         self.captured_text.tag_remove("speech_line", "1.0", "end")
         self.captured_text.tag_remove("speech_word", "1.0", "end")
+        self.markdown_preview.clear_highlight()
         if self.captured_text.get("1.0", "end-1c") != source_text:
             self._speech_highlight_owner = None
         self._update_reader_transport()
@@ -2152,7 +2217,7 @@ class SettingsUI:
 
     def _reader_sentence_index(self) -> tuple[int, int]:
         source = self.captured_text.get("1.0", "end-1c")
-        sentences = prepare_for_speech(source).sentences
+        sentences = self.prepare_reader_document(source).sentences
         if not sentences:
             return 0, 0
         index = 0
@@ -2185,7 +2250,7 @@ class SettingsUI:
         if request_id is None or not self._reader_can_navigate:
             return
         source = self.captured_text.get("1.0", "end-1c")
-        sentences = prepare_for_speech(source).sentences
+        sentences = self.prepare_reader_document(source).sentences
         index, count = self._reader_sentence_index()
         target = index + direction
         if 0 <= target < count:
@@ -2228,6 +2293,12 @@ class SettingsUI:
         self.captured_text.tag_add("speech_word", word_start, word_end)
         self.captured_text.tag_raise("speech_word", "speech_line")
         self.captured_text.see(word_start)
+        if self._markdown_mode:
+            document = self.prepare_reader_document(displayed)
+            for index, word in enumerate(document.words):
+                if word.source_start == source_start and word.source_end == source_end:
+                    self.markdown_preview.highlight(index)
+                    break
         self._update_reader_transport()
 
     def clear_speech_progress(self, request_id: int | None = None) -> None:
@@ -2241,6 +2312,7 @@ class SettingsUI:
             self._suppressed_speech_highlights.add(self._speech_highlight_owner)
         self.captured_text.tag_remove("speech_line", "1.0", "end")
         self.captured_text.tag_remove("speech_word", "1.0", "end")
+        self.markdown_preview.clear_highlight()
         self._speech_highlight_owner = None
         self._reader_paused = False
         self._reader_can_navigate = False
@@ -2399,6 +2471,8 @@ class SettingsUI:
 
     def close(self) -> None:
         """Flush debounced settings before the native window is destroyed."""
+        if hasattr(self, 'markdown_preview'):
+            self.markdown_preview.close()
         if self._reader_rate_after is not None:
             self.root.after_cancel(self._reader_rate_after)
             self._save_reader_rate()
@@ -2407,8 +2481,8 @@ class SettingsUI:
 
     def copy_text(self) -> None:
         """Copy the currently displayed OCR text to the standard clipboard."""
-        text = self.captured_text.get("1.0", "end-1c").strip()
-        if not text:
+        text = self.captured_text.get("1.0", "end-1c")
+        if not text.strip():
             self.set_status("There is no captured text to copy.", error=True)
             return
         self.root.clipboard_clear()

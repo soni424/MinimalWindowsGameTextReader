@@ -1,6 +1,15 @@
-# Game Text Reader 1.2.6-dev
+# Game Text Reader 1.2.7-dev
 
 Development build for testing before a stable release.
+
+## Markdown Reader preview
+
+- Added Edit and Preview tabs for Last captured text. Recognizable Markdown paste opens Preview; OCR captures and ordinary text remain in Edit.
+- Render headings, lists, tasks, tables, footnotes, equations, code blocks, and safe expandable sections in the current Light or Dark appearance. Remote images require a per-document click to load; external links open in the system browser.
+- Play and Read Again speak rendered prose with source-aware sentence navigation and highlighting, omitting Markdown syntax, URLs, code, and equations. Copy continues to return the exact editable source.
+- Preview uses the Microsoft Edge WebView2 Runtime. If WebView2 is absent or cannot start, Edit and audio reading remain available. No user Markdown content or personal configuration is included in the package.
+
+## Previous development build: 1.2.6-dev
 
 ## Reader playback speed
 

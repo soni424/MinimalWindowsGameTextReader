@@ -43,6 +43,13 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.7-dev
+
+- Added **Edit / Preview** tabs to Last captured text. Pasting recognizable Markdown opens a styled preview automatically; ordinary text and OCR captures stay in Edit. The source remains editable, and **Copy** copies the original Markdown.
+- Preview supports headings, formatting, lists and tasks, tables, footnotes, code, equations, safe expandable sections, and links. It follows Dark/Light appearance. Remote images remain placeholders until you choose **Load remote images** for the current document; links open in your normal browser.
+- Reader Play and Read Again, including the shortcut and tray action, speak Markdown prose instead of markup, URLs, code, or equations. Sentence navigation, word seeking in Edit, and speech highlighting remain source-aware. Expandable-section prose is spoken even when its section is collapsed.
+- Preview requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). If it cannot start, Edit and speech remain available. Markdown content is temporary and is not saved with settings.
+
 ### Development build: 1.2.6-dev
 
 - Added a Reader-only **Reading speed** control beside the playback buttons, from **0.5× to 2.0×** in 0.1× steps, with a **1.0×** reset. It changes an active Reader passage without restarting it and remembers the choice across updates.
@@ -102,6 +109,8 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 3. Press the Fixed Box hotkey (default `Alt+Z`) to OCR and read the selected profile's area.
 4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
 5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
+
+To read a Markdown document, paste it into **Last captured text**. The Reader opens **Preview** for recognizable Markdown; switch to **Edit** to change its source. You can also open Preview manually for any text. The toolbar's **Copy** action copies the source, while selecting text within Preview copies the rendered text. The Preview's **Load remote images** button is an explicit per-document choice; images do not load automatically. Reader speech uses the formatted prose in either tab, and switching tabs does not change the source or restart a reading.
 
 In **Last captured text**, use **Play** to begin the visible passage, **Pause** to hold its audio and highlighted word, and **Play** again to resume. **Previous sentence** and **Next sentence** jump across spoken sentence boundaries, including headings and bullet items; an ordinary wrapped OCR line stays in its sentence. Skipping while paused stays paused. The controls follow only the current passage and leave other voices alone. If a voice supplies no word timing, Play/Pause remains available but sentence skipping is disabled.
 

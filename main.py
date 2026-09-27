@@ -612,7 +612,7 @@ class GameTextReaderApplication:
     def read_again(self) -> None:
         """Replay the last corrected OCR text without another capture or correction."""
         display_text = self.text_state.last_successful_text
-        document = prepare_for_speech(display_text)
+        document = getattr(self.ui, 'prepare_reader_document', prepare_for_speech)(display_text)
         if not document.spoken_text:
             self.ui.set_status("There is no successfully captured text to read again.", error=True)
             return
@@ -635,7 +635,7 @@ class GameTextReaderApplication:
             if operation(request_id, source_text):
                 return
             self.ui.clear_speech_progress(request_id)
-        document = prepare_for_speech(source_text)
+        document = getattr(self.ui, 'prepare_reader_document', prepare_for_speech)(source_text)
         if not document.spoken_text:
             return
         settings = self.config.get()
@@ -885,6 +885,9 @@ class GameTextReaderApplication:
 def main(argv: list[str] | None = None) -> None:
     """Create and run the desktop application."""
     arguments = sys.argv[1:] if argv is None else argv
+    if '--markdown-preview-smoke' in arguments:
+        from markdown_preview import run_packaged_preview_smoke
+        raise SystemExit(0 if run_packaged_preview_smoke() else 1)
     set_windows_app_identity()
     enable_dpi_awareness()
     GameTextReaderApplication(start_hidden=STARTUP_ARGUMENT in arguments).run()
