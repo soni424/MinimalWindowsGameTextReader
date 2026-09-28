@@ -40,6 +40,7 @@ MIN_MAX_OVERLAP = 2
 MAX_MAX_OVERLAP = 4
 _MAX_RETIRED_PLAYERS = 3
 _PLAYBACK_RETIRE_GRACE_SECONDS = 0.5
+_MAX_READER_AUDIO_CACHE_BYTES = 16 * 1024 * 1024
 _speech_runtime_threads = threading.local()
 
 
@@ -70,6 +71,8 @@ class _PlaybackChannel:
     retired: bool = False
     word_timings: tuple["_WordTiming", ...] = ()
     next_word_timing: int = 0
+    muted_for_rate: bool = False
+    on_audible: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,39 @@ class _WordTiming:
     seconds: float
     spoken_start: int
     spoken_end: int
+
+
+@dataclass(frozen=True)
+class _CachedSapiAudio:
+    wav_data: bytes
+    timings: tuple[_WordTiming, ...]
+    native_offsets: tuple[int, ...]
+    spoken_to_native: tuple[int, ...]
+
+
+class _ReaderAudioCache:
+    """One bounded, in-memory replay buffer shared by a TtsEngine's sessions."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._key: tuple[object, ...] | None = None
+        self._audio: _CachedSapiAudio | None = None
+
+    @staticmethod
+    def _request_key(request: _SpeechRequest) -> tuple[object, ...]:
+        return (request.text, request.voice_id, request.rate, request.volume,
+                tuple((pause.spoken_offset, pause.milliseconds) for pause in request.pauses))
+
+    def get(self, request: _SpeechRequest) -> _CachedSapiAudio | None:
+        with self._lock:
+            return self._audio if self._key == self._request_key(request) else None
+
+    def put(self, request: _SpeechRequest, audio: _CachedSapiAudio) -> None:
+        if len(audio.wav_data) > _MAX_READER_AUDIO_CACHE_BYTES:
+            return
+        with self._lock:
+            self._key = self._request_key(request)
+            self._audio = audio
 
 
 class TtsError(RuntimeError):
@@ -206,46 +242,6 @@ def _normalise_reader_rate(value: object) -> float:
     return round(max(0.5, min(2.0, rate)) * 10) / 10
 
 
-def _sapi_reader_segments(request: _SpeechRequest, limit: int = 280) -> tuple[_SpeechRequest, ...]:
-    """Split a long Reader passage at sentence/word boundaries, retaining source spans."""
-    if not request.reader_controlled or not request.voice_id.startswith('sapi:') or len(request.text) <= 420:
-        return ()
-    words = request.word_spans
-    if not words:
-        return ()
-    boundaries = {sentence.spoken_end for sentence in
-                  (request.document.sentences if request.document else ())}
-    pieces = []
-    first = 0
-    while first < len(words):
-        start = words[first].spoken_start
-        last = first
-        preferred = None
-        while last + 1 < len(words) and words[last + 1].spoken_end - start <= limit:
-            if words[last].spoken_end in boundaries and words[last].spoken_end - start >= 130:
-                preferred = last
-            last += 1
-        if preferred is not None:
-            last = preferred
-        end = words[last + 1].spoken_start if last + 1 < len(words) else len(request.text)
-        # Include punctuation following the last word, but never the next word.
-        text = request.text[start:end].rstrip()
-        if not text:
-            break
-        length = len(text)
-        spans = tuple(SpeechWordSpan(w.spoken_start - start, w.spoken_end - start,
-                                     w.source_start, w.source_end)
-                      for w in words[first:last + 1])
-        pauses = tuple(SpeechPause(p.spoken_offset - start, p.source_offset, p.milliseconds)
-                       for p in request.pauses if start <= p.spoken_offset < start + length)
-        pieces.append(_SpeechRequest(request.request_id, text, request.voice_id, request.rate,
-                                     request.volume, source_text=request.source_text,
-                                     word_spans=spans, pauses=pauses,
-                                     playback_rate=request.playback_rate))
-        first = last + 1
-    return tuple(pieces) if len(pieces) > 1 else ()
-
-
 class _WindowsSpeechSession:
     """Own worker-thread speech synthesis and isolated MediaPlayer channels."""
 
@@ -276,10 +272,7 @@ class _WindowsSpeechSession:
         self._playback_rate_error = ""
         self._pending_playback_rate: float | None = None
         self._pending_rate_since = 0.0
-        self._reader_segments: tuple[_SpeechRequest, ...] = ()
-        self._reader_segment_index = 0
-        self._reader_segment_owner: _SpeechRequest | None = None
-        self._reader_prefetched: tuple[bytes, tuple[_WordTiming, ...]] | None = None
+        self._reader_audio_cache: _ReaderAudioCache | None = None
 
     def prepare(self, voice_id: str) -> None:
         # All playback uses MediaPlayer. SAPI is only a synthesizer for SAPI
@@ -312,9 +305,6 @@ class _WindowsSpeechSession:
             return
         self.prepare(request.voice_id)
         if request.voice_id.startswith("winrt:"):
-            self._reader_segments = ()
-            self._reader_prefetched = None
-            self._reader_segment_owner = None
             self._start_winrt(request, on_started, replace)
         else:
             self._start_sapi(request, on_started, replace)
@@ -330,20 +320,7 @@ class _WindowsSpeechSession:
             return True
         if channel.failed.is_set():
             raise TtsError(channel.error or "Windows media playback failed.")
-        if (self._reader_segments and not self._paused_at
-                and self._reader_prefetched is None
-                and self._reader_segment_index + 1 < len(self._reader_segments)):
-            next_piece = self._reader_segments[self._reader_segment_index + 1]
-            self._reader_prefetched = self._sapi_segment_audio(next_piece)
         if channel.finished.is_set():
-            if (self._reader_segments and self._reader_segment_owner is not None
-                    and self._reader_segment_index + 1 < len(self._reader_segments)):
-                self._reader_segment_index += 1
-                next_piece = self._reader_segments[self._reader_segment_index]
-                data = self._reader_prefetched or self._sapi_segment_audio(next_piece)
-                self._reader_prefetched = None
-                self._play_sapi_segment(self._reader_segment_owner, next_piece, data, lambda: None)
-                return False
             self._retire_current_channel()
             return True
         if self._paused_at:
@@ -366,9 +343,6 @@ class _WindowsSpeechSession:
         self._active_backend = ""
         self._winrt_deadline = 0.0
         self._paused_at = 0.0
-        self._reader_segments = ()
-        self._reader_prefetched = None
-        self._reader_segment_owner = None
 
     def pause(self) -> bool:
         channel = self._winrt_current_channel
@@ -454,9 +428,22 @@ class _WindowsSpeechSession:
         if desired is None:
             return
         if self.set_playback_rate(desired):
+            self._unmute_started_channel()
             return
         if time.monotonic() - self._pending_rate_since >= 1.0:
             self._pending_playback_rate = None
+            self._unmute_started_channel()
+
+    def _unmute_started_channel(self) -> None:
+        channel = self._winrt_current_channel
+        if channel is None or not channel.muted_for_rate:
+            return
+        channel.player.volume = 1.0
+        channel.muted_for_rate = False
+        started = channel.on_audible
+        channel.on_audible = None
+        if started is not None:
+            started()
 
     def has_word_timing(self) -> bool:
         channel = self._winrt_current_channel
@@ -787,13 +774,16 @@ class _WindowsSpeechSession:
         self._stream_duration = duration_seconds
         try:
             self._set_media_stream(channel, stream)
-            channel.player.volume = 1.0
-            channel.player.play()
-            if playback_rate != 1.0:
+            if playback_rate != 1.0 and not self.set_playback_rate(playback_rate):
                 self._pending_playback_rate = playback_rate
                 self._pending_rate_since = time.monotonic()
+                channel.muted_for_rate = True
+                channel.on_audible = on_started
+                channel.player.volume = 0.0
             else:
                 self._pending_playback_rate = None
+                channel.player.volume = 1.0
+            channel.player.play()
         except Exception:
             self._winrt_current_channel = None
             self._winrt_player = None
@@ -802,7 +792,8 @@ class _WindowsSpeechSession:
         self._active_backend = "winrt"
         self._refresh_deadline()
         self._paused_at = 0.0
-        on_started()
+        if not channel.muted_for_rate:
+            on_started()
 
     @staticmethod
     def _winrt_word_timings(stream: object) -> tuple[_WordTiming, ...]:
@@ -938,17 +929,20 @@ class _WindowsSpeechSession:
         on_started: Callable[[], None],
         replace: bool = False,
     ) -> None:
-        self._reader_segments = _sapi_reader_segments(request)
-        self._reader_segment_index = 0
-        self._reader_segment_owner = request if self._reader_segments else None
-        self._reader_prefetched = None
-        piece = self._reader_segments[0] if self._reader_segments else request
-        data = self._sapi_segment_audio(piece)
+        data = self._sapi_segment_audio(request)
         if request.cancel.is_set():
             return
-        self._play_sapi_segment(request, piece, data, on_started, replace)
+        self._play_sapi_segment(request, request, data, on_started, replace)
 
     def _sapi_segment_audio(self, piece: _SpeechRequest) -> tuple[bytes, tuple[_WordTiming, ...]]:
+        cache = self._reader_audio_cache if (piece.reader_controlled and piece.document is not None
+                    and piece.text == piece.document.spoken_text) else None
+        cached = cache.get(piece) if cache is not None else None
+        if cached is not None:
+            piece.native_offsets = cached.native_offsets
+            piece.spoken_to_native = cached.spoken_to_native
+            self._sapi_word_timings = cached.timings
+            return cached.wav_data, cached.timings
         try:
             wav_data = self._synthesise_sapi_wav(piece)
         except TtsError:
@@ -972,6 +966,9 @@ class _WindowsSpeechSession:
             timings = tuple(_WordTiming(word.seconds + leading_ms / 1000,
                                         word.spoken_start, word.spoken_end)
                             for word in timings)
+        if cache is not None:
+            cache.put(piece, _CachedSapiAudio(wav_data, timings, piece.native_offsets,
+                                              piece.spoken_to_native))
         return wav_data, timings
 
     def _play_sapi_segment(
@@ -1071,6 +1068,7 @@ class TtsEngine:
         self._seek_aliases: dict[int, int] = {}
         self._initial_voice_id = initial_voice_id
         self._session_factory = session_factory or _WindowsSpeechSession
+        self._reader_audio_cache = _ReaderAudioCache()
         self._requests: queue.Queue[_SpeechCommand | None] = queue.Queue(maxsize=128)
         self._shutdown = threading.Event()
         self._ready = threading.Event()
@@ -1698,6 +1696,8 @@ class TtsEngine:
                 legacy_override = type(self)._play is not TtsEngine._play
                 nonblocking = self._supports_nonblocking(session) and not legacy_override
                 if nonblocking:
+                    if isinstance(session, _WindowsSpeechSession):
+                        session._reader_audio_cache = self._reader_audio_cache
                     session.start(request, mark_started, replace)
                     return session, True
                 self._play(request)

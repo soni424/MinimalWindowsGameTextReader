@@ -14,7 +14,7 @@ import tkinter as tk
 from config import ConfigStore
 from ocr_correction import OcrCorrector, CorrectionOptions, ReplacementRule
 from settings_ui import SettingsUI, _ShortcutRecorderDialog
-from speech_text import prepare_for_speech, native_offset_map
+from speech_text import SpeechPause, prepare_for_speech, native_offset_map
 from tts_engine import TtsEngine, TtsError, _SpeechRequest, _WindowsSpeechSession, _WordTiming
 from datetime import timedelta
 from hotkey_manager import HotkeyManager, HotkeyError
@@ -233,18 +233,182 @@ class SeekTests(unittest.TestCase):
 
 
 class ReaderTransportTests(unittest.TestCase):
-    def test_long_sapi_reader_splits_at_spoken_boundaries_without_losing_words(self):
-        from tts_engine import _SpeechRequest, _sapi_reader_segments
+    def test_sapi_reader_audio_cache_reuses_only_matching_complete_passages(self):
+        from tts_engine import _ReaderAudioCache
+        document = prepare_for_speech('Evidence supports this result.')
+        cache = _ReaderAudioCache()
+        synthesis_calls = []
+
+        def make_request(text=None, voice='sapi:voice', rate=2, volume=60, pauses=()):
+            return _SpeechRequest(1, text or document.spoken_text, voice, rate, volume,
+                                  document=document, reader_controlled=True, pauses=pauses)
+
+        def make_session():
+            session = _WindowsSpeechSession()
+            session._reader_audio_cache = cache
+
+            def synth(request, *, structured=True):
+                synthesis_calls.append((request.text, request.voice_id, request.rate,
+                                        request.volume, request.pauses))
+                request.native_offsets = (0, 1)
+                request.spoken_to_native = (0, 1)
+                session._sapi_word_timings = (_WordTiming(0.1, 0, 8),)
+                return b'fake wav bytes'
+
+            session._synthesise_sapi_wav = synth
+            return session
+
+        first = make_session()
+        first_request = make_request()
+        self.assertEqual(first._sapi_segment_audio(first_request)[0], b'fake wav bytes')
+        second = make_session()
+        repeated = make_request()
+        self.assertEqual(second._sapi_segment_audio(repeated)[0], b'fake wav bytes')
+        self.assertEqual(len(synthesis_calls), 1)
+        self.assertEqual(repeated.native_offsets, first_request.native_offsets)
+        self.assertEqual(second._sapi_word_timings, (_WordTiming(0.1, 0, 8),))
+        for changed in (make_request(voice='sapi:other'), make_request(rate=3),
+                        make_request(volume=50),
+                        make_request(pauses=(SpeechPause(9, 9, 250),))):
+            second._sapi_segment_audio(changed)
+        self.assertEqual(len(synthesis_calls), 5)
+        suffix = make_request(text='supports this result.')
+        second._sapi_segment_audio(suffix)
+        self.assertEqual(len(synthesis_calls), 6)
+
+    def test_cancel_during_full_sapi_synthesis_never_starts_audio(self):
+        document = prepare_for_speech('A longer passage that is no longer wanted.')
+        request = _SpeechRequest(1, document.spoken_text, 'sapi:voice', 0, 50,
+                                 document=document, reader_controlled=True)
+        session = _WindowsSpeechSession()
+        played = []
+
+        def synth(piece):
+            piece.cancel.set()
+            return b'fake wav bytes', ()
+
+        session._sapi_segment_audio = synth
+        session._play_sapi_segment = lambda *args: played.append(args)
+        session._start_sapi(request, lambda: None)
+        self.assertEqual(played, [])
+
+    def test_reader_audio_cache_does_not_store_oversized_audio(self):
+        from tts_engine import _CachedSapiAudio, _ReaderAudioCache
+        document = prepare_for_speech('A large speech buffer.')
+        request = _SpeechRequest(1, document.spoken_text, 'sapi:voice', 0, 50,
+                                 document=document, reader_controlled=True)
+        cache = _ReaderAudioCache()
+        with patch('tts_engine._MAX_READER_AUDIO_CACHE_BYTES', 4):
+            cache.put(request, _CachedSapiAudio(b'12345', (), (), ()))
+        self.assertIsNone(cache.get(request))
+
+    def test_reader_rate_is_applied_before_playback_begins(self):
+        from tts_engine import _PlaybackChannel
+        events = []
+
+        class Playback:
+            position = timedelta(0)
+            natural_duration = timedelta(seconds=3)
+            _rate = 1.0
+
+            @property
+            def playback_rate(self):
+                return self._rate
+
+            @playback_rate.setter
+            def playback_rate(self, value):
+                events.append(('rate', value))
+                self._rate = value
+
+        class Player:
+            def __init__(self):
+                self.playback_session = Playback()
+                self.volume = 1.0
+
+            def play(self):
+                events.append(('play', self.playback_session.playback_rate))
+
+        session = _WindowsSpeechSession()
+        session._ensure_winrt = lambda: None
+        session._set_media_stream = lambda channel, stream: None
+        session._new_playback_channel = lambda: _PlaybackChannel(Player())
+        session._start_stream(object(), lambda: None, False, 3.0, playback_rate=0.9)
+        self.assertEqual(events[:2], [('rate', 0.9), ('play', 0.9)])
+        self.assertEqual(session.effective_playback_rate(), 0.9)
+
+    def test_reader_remains_muted_until_rate_becomes_available_or_falls_back(self):
+        from tts_engine import _PlaybackChannel
+
+        class Playback:
+            position = timedelta(0)
+            natural_duration = timedelta(seconds=3)
+            ready = False
+            _rate = 1.0
+
+            @property
+            def playback_rate(self):
+                return self._rate
+
+            @playback_rate.setter
+            def playback_rate(self, value):
+                if not self.ready:
+                    raise OSError('Rate not ready')
+                self._rate = value
+
+        class Player:
+            def __init__(self):
+                self.playback_session = Playback()
+                self.volume = 1.0
+                self.play_count = 0
+
+            def play(self):
+                self.play_count += 1
+
+        def session_with_player():
+            session = _WindowsSpeechSession()
+            player = Player()
+            session._ensure_winrt = lambda: None
+            session._set_media_stream = lambda channel, stream: None
+            session._new_playback_channel = lambda: _PlaybackChannel(player)
+            return session, player
+
+        session, player = session_with_player()
+        started = []
+        session._start_stream(object(), lambda: started.append(True), False, 3.0,
+                              playback_rate=0.9)
+        self.assertEqual(player.play_count, 1)
+        self.assertEqual(player.volume, 0.0)
+        self.assertFalse(started)
+        player.playback_session.ready = True
+        self.assertFalse(session.poll())
+        self.assertEqual(player.volume, 1.0)
+        self.assertEqual(started, [True])
+        self.assertEqual(session.effective_playback_rate(), 0.9)
+
+        session, player = session_with_player()
+        started = []
+        session._start_stream(object(), lambda: started.append(True), False, 3.0,
+                              playback_rate=1.2)
+        session._pending_rate_since = time.monotonic() - 2
+        self.assertFalse(session.poll())
+        self.assertEqual(player.volume, 1.0)
+        self.assertEqual(started, [True])
+        self.assertEqual(session.effective_playback_rate(), 1.0)
+        self.assertTrue(session._playback_rate_error)
+
+    def test_long_sapi_reader_uses_one_continuous_stream(self):
         document = prepare_for_speech(' '.join(f'Sentence {i} has several words.' for i in range(30)))
         request = _SpeechRequest(1, document.spoken_text, 'sapi:voice', 0, 50,
                                  source_text=document.source_text, word_spans=document.words,
                                  pauses=document.pauses, document=document, reader_controlled=True)
-        chunks = _sapi_reader_segments(request)
-        self.assertGreater(len(chunks), 2)
-        self.assertLess(len(chunks[0].text), 320)
-        self.assertEqual(' '.join(chunk.text for chunk in chunks), document.spoken_text)
-        self.assertEqual([span.source_start for chunk in chunks for span in chunk.word_spans],
-                         [span.source_start for span in document.words])
+        session = _WindowsSpeechSession()
+        played = []
+        session._sapi_segment_audio = lambda piece: (b'wav', ())
+        session._play_sapi_segment = lambda owner, piece, audio, started, replace=False: played.append(piece)
+        session._start_sapi(request, lambda: None)
+        self.assertEqual(len(played), 1)
+        self.assertEqual(played[0].text, document.spoken_text)
+        self.assertEqual(played[0].word_spans, document.words)
 
     def setUp(self):
         self.sessions = []
@@ -610,7 +774,7 @@ class ModifierTests(unittest.TestCase):
 
 
 class NativeSeekTests(unittest.TestCase):
-    def test_native_sapi_reader_segments_finish_as_one_request(self):
+    def test_native_sapi_reader_one_stream_finishes_one_request(self):
         voice = next((item for item in TtsEngine.list_voices() if item.engine == 'sapi'), None)
         if voice is None:
             self.skipTest('No SAPI voice is installed')
@@ -619,7 +783,15 @@ class NativeSeekTests(unittest.TestCase):
             for index in range(9))
         sessions, started, finished, words, errors = [], [], [], [], []
         def factory():
-            session = _WindowsSpeechSession()
+            class CountedSession(_WindowsSpeechSession):
+                def __init__(self):
+                    super().__init__()
+                    self.stream_starts = 0
+
+                def _start_stream(self, *args, **kwargs):
+                    self.stream_starts += 1
+                    return super()._start_stream(*args, **kwargs)
+            session = CountedSession()
             sessions.append(session)
             return session
         engine = TtsEngine(session_factory=factory,
@@ -632,9 +804,8 @@ class NativeSeekTests(unittest.TestCase):
             document = prepare_for_speech(source)
             ticket = engine.play_reader(document, voice.identifier, 0, 0, 2.0)
             self.assertTrue(eventually(lambda: len(started) == 1, 8), errors)
-            self.assertGreater(len(sessions[-1]._reader_segments), 1)
             self.assertTrue(ticket.wait(25), errors)
-            self.assertGreater(sessions[-1]._reader_segment_index, 0)
+            self.assertEqual(sessions[-1].stream_starts, 1)
             self.assertEqual(started[0][1], document.spoken_text)
             self.assertEqual(finished[-1][1], document.spoken_text)
             self.assertEqual({word[0] for word in words}, {ticket.request_id})

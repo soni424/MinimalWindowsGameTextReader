@@ -39,6 +39,22 @@ class SpeechTextTests(unittest.TestCase):
             "one: First. two: Second. Third.",
         )
 
+    def test_plain_list_label_colon_has_a_mapped_pause(self) -> None:
+        source = '- Empirical Evidence: Ideas need measurable data.\n- Falsifiability: Claims must be testable.'
+        document = prepare_for_speech(source)
+        for label, next_word in [('Empirical Evidence:', 'Ideas'), ('Falsifiability:', 'Claims')]:
+            offset = source.index(next_word)
+            word = next(word for word in document.words if word.source_start == offset)
+            self.assertEqual(source[source.index(label):offset].strip(), label)
+            self.assertIn(250, [pause.milliseconds for pause in document.pauses
+                                if pause.spoken_offset == word.spoken_start])
+        self.assertEqual(document.source_text, source)
+
+    def test_non_label_colons_do_not_gain_extra_pauses(self) -> None:
+        for source in ('It is 12:30 now.', 'Visit https://example.com.',
+                       'The answer is: yes.'):
+            self.assertFalse(prepare_for_speech(source).pauses)
+
     def test_empty_text_stays_empty(self) -> None:
         self.assertEqual(format_for_speech(" \n\n "), "")
 

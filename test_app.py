@@ -1182,6 +1182,8 @@ class WindowsComponentTests(unittest.TestCase):
                 channel.failed = threading.Event()
                 channel.error = ""
                 channel.retired = False
+                channel.muted_for_rate = False
+                channel.on_audible = None
                 return channel
 
         session._new_playback_channel = ChannelFactory()  # type: ignore[method-assign]

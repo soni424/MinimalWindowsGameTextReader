@@ -137,6 +137,7 @@ class SpeechDocument:
 
 
 _STRUCTURE_LIST = re.compile(r"^(\s*)(?:[-+*•◦▪‣⁃∙·●○■□◆◇▶►]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)")
+_LIST_LABEL = re.compile(r"^(?:\*\*|__|\*|_)?[^:\n.!?]{1,80}:(?:\*\*|__|\*|_)?[ \t]+(?=\S)")
 _STRUCTURE_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
 _STRUCTURE_RULE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 
@@ -166,6 +167,9 @@ def structural_pauses(source: str, words: tuple[SpeechWordSpan, ...]) -> tuple[S
                 depth = len(item.group(1).expandtabs(4))
                 pending = max(pending, 180 if depth == previous_list_depth else 350)
                 previous_list_depth = depth
+                label = _LIST_LABEL.match(line[item.end():])
+                if label:
+                    events.append((cursor + item.end() + label.end(), 250))
             elif previous_list_depth is not None:
                 previous_list_depth = None
             if pending:

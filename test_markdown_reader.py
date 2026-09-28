@@ -16,6 +16,23 @@ from settings_ui import SettingsUI
 
 
 class MarkdownReaderTests(unittest.TestCase):
+    def test_emphasized_list_labels_pause_before_explanations(self):
+        source = ('- **Empirical Evidence:** Ideas must be backed by data.\n'
+                  '- **Falsifiability:** A claim must be testable.\n'
+                  '- **Self-Correction:** Science can change.\n'
+                  '- **Objectivity:** Experiments reduce bias.')
+        document = prepare_markdown_for_speech(source)
+        for label, next_word in [('Empirical Evidence:', 'Ideas'),
+                                 ('Falsifiability:', 'A'),
+                                 ('Self-Correction:', 'Science'),
+                                 ('Objectivity:', 'Experiments')]:
+            self.assertIn(label, document.spoken_text)
+            offset = source.index(next_word, source.index(label))
+            word = next(word for word in document.words if word.source_start == offset)
+            self.assertIn(250, [pause.milliseconds for pause in document.pauses
+                                if pause.spoken_offset == word.spoken_start])
+        self.assertEqual(document.source_text, source)
+
     def test_ordered_steps_are_spoken_and_mapped_to_source_digits(self):
         source = ('### 1. How Science Works\n\n' + ''.join(
             f'{index}. **{name}:** Details.\n' for index, name in enumerate(

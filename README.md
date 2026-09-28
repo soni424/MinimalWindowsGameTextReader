@@ -43,11 +43,18 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.10-dev
+
+- Long Reader passages using a SAPI voice now play as one continuous stream, avoiding the player handoffs that could make narration stutter or change pace. A first read may spend longer preparing the whole passage; the app remains responsive and shows its preparing status until playback begins.
+- Repeating the same passage can reuse a bounded in-memory audio buffer when its text, selected voice, base rate, volume, and pause structure have not changed. The buffer is temporary and is never saved with settings.
+- The Reader speed multiplier is applied before audio becomes audible. If Windows cannot accept that speed at startup, playback stays muted briefly while it retries, then uses the last working speed and reports the fallback.
+- Bullet labels such as **Empirical Evidence:** now have a short pause before their explanation in Markdown, plain text, and OCR captures. Times, URLs, and colons outside list labels are unchanged; displayed and copied text is untouched.
+
 ### Development build: 1.2.9-dev
 
 - Numbered steps in Markdown and structured text are spoken as “one,” “two,” and so on, while headings, ordinary numbers, and decimals remain intact. Number highlights map back to the original digits.
 - Double-click the current passage in either Edit or Preview to seek to that word. Repeated seeks replace the previous Reader stream rather than leaving overlapping narration. Preview accepts only a word index from the current local document.
-- Long Reader passages using SAPI start with a short synthesized opening and prepare following segments during playback. This reduces the wait after pasting a long document; the selected voice is retained. The preparing message remains until speech actually starts.
+- This build introduced short synthesized opening segments for long SAPI passages. Version 1.2.10-dev replaces them with continuous playback for smoother narration.
 - Action labels now have Dark/Light, DPI-aware line icons throughout the app. The native title bar, control names, and shortcuts are unchanged.
 
 ### Development build: 1.2.8-dev
