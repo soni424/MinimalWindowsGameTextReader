@@ -12,6 +12,7 @@ from tkinter import filedialog, ttk
 from typing import Callable
 
 from appearance import ThemePalette, apply_windows_title_bar, resolve_theme
+from action_icons import apply_action_icons, icon_for_button
 from config import ConfigStore
 from app_version import version_label
 from hotkey_manager import HotkeyError, normalise_hotkey
@@ -37,6 +38,7 @@ def _theme_dialog_window(window: tk.Toplevel, palette: ThemePalette) -> None:
 
     window.bind("<Map>", apply_frame, add="+")
     window.after_idle(apply_frame)
+    window.after_idle(lambda: apply_action_icons(window, palette.dark))
 
 
 def _center_dialog(window: tk.Toplevel, parent: tk.Misc) -> None:
@@ -545,6 +547,7 @@ class SettingsUI:
         self._last_result: CorrectionResult | None = None
         self._updating_captured_text = False
         self._markdown_mode = False
+        self._prepared_document_cache = None
         self._reader_paste_before = ''
         self._preview_open_after: str | None = None
         self._preview_sync_after: str | None = None
@@ -560,6 +563,7 @@ class SettingsUI:
         self._configure_window()
         self._configure_styles(self._palette)
         self._build()
+        apply_action_icons(self.root, self._palette.dark)
         self._apply_tk_colours(self._palette)
         self.set_profiles(settings["capture_profiles"], settings["selected_profile_id"], settings.get("fixed_box"))
 
@@ -901,6 +905,15 @@ class SettingsUI:
         if word is not None and self._speech_highlight_owner is not None:
             self.on_seek(self._speech_highlight_owner, self.captured_text.get('1.0', 'end-1c'), word[0])
 
+    def _preview_seek_word(self, index: int, source: str) -> None:
+        current = self.captured_text.get('1.0', 'end-1c')
+        if source != current or self._speech_highlight_owner is None or not self._markdown_mode:
+            return
+        document = self.prepare_reader_document(current)
+        if 0 <= index < len(document.words):
+            self.on_seek(self._speech_highlight_owner, current,
+                         document.words[index].source_start)
+
     def _reader_context_menu(self, event: object) -> str:
         widget = self.captured_text
         selection = widget.tag_ranges('sel')
@@ -1181,7 +1194,7 @@ class SettingsUI:
         preview_host.grid(row=1, column=0, sticky='nsew')
         preview_host.columnconfigure(0, weight=1)
         preview_host.rowconfigure(0, weight=1)
-        self.markdown_preview = MarkdownPreview(preview_host)
+        self.markdown_preview = MarkdownPreview(preview_host, on_seek=self._preview_seek_word)
         preview_host.bind("<Configure>", self._queue_preview_layout_sync)
         self.reader_tabs.bind('<<NotebookTabChanged>>', self._reader_tab_changed)
         self.captured_text_frame.columnconfigure(0, weight=1)
@@ -1838,6 +1851,7 @@ class SettingsUI:
         self._palette = resolve_theme(preference)
         self._configure_styles(self._palette)
         self._apply_tk_colours(self._palette)
+        apply_action_icons(self.root, self._palette.dark)
         self.set_status(f"{self.theme_value.get()} appearance applied.")
 
     def _load_voices(self) -> None:
@@ -2089,6 +2103,7 @@ class SettingsUI:
     def set_auto_read_state(self, active: bool, message: str = "") -> None:
         if hasattr(self, "auto_read_button"):
             self.auto_read_button.configure(text="Stop Auto-Read" if active else "Start Auto-Read")
+            icon_for_button(self.auto_read_button, self._palette.dark)
         if hasattr(self, "auto_read_status"):
             self.auto_read_status.set(message or ("Auto-Read is on." if active else "Auto-Read is off."))
 
@@ -2200,6 +2215,7 @@ class SettingsUI:
         finally:
             self._updating_captured_text = False
         self._markdown_mode = False
+        self._prepared_document_cache = None
         if hasattr(self, 'reader_tabs'):
             self.reader_tabs.select(self.captured_text_frame)
             self.markdown_preview.clear_highlight()
@@ -2212,6 +2228,7 @@ class SettingsUI:
         current = self.captured_text.get('1.0', 'end-1c')
         if current != self._reader_paste_before and looks_like_markdown(current):
             self._markdown_mode = True
+            self.prepare_reader_document(current)
             self.reader_tabs.select(self.reader_preview_frame)
 
     def _reader_tab_changed(self, _event: object | None = None) -> None:
@@ -2251,9 +2268,13 @@ class SettingsUI:
         self.load_markdown_images.configure(state='disabled')
 
     def prepare_reader_document(self, source: str):
-        if self._markdown_mode and source == self.captured_text.get('1.0', 'end-1c'):
-            return prepare_markdown_for_speech(source)
-        return prepare_for_speech(source)
+        markdown = self._markdown_mode and source == self.captured_text.get('1.0', 'end-1c')
+        cached = self._prepared_document_cache
+        if cached is not None and cached[0] == source and cached[1] == markdown:
+            return cached[2]
+        document = prepare_markdown_for_speech(source) if markdown else prepare_for_speech(source)
+        self._prepared_document_cache = (source, markdown, document)
+        return document
 
     def _captured_text_modified(self, _event: object | None = None) -> None:
         """Promote typed or pasted editor contents to the current replay text."""
@@ -2268,6 +2289,7 @@ class SettingsUI:
             self.on_reader_invalidated(self._speech_highlight_owner)
         self.clear_speech_progress()
         editor_text = self.captured_text.get("1.0", "end-1c")
+        self._prepared_document_cache = None
         text = editor_text.strip()
         if self._markdown_mode and not looks_like_markdown(editor_text):
             self._markdown_mode = False
@@ -2351,6 +2373,7 @@ class SettingsUI:
         playing = self._speech_highlight_owner is not None
         self.play_pause_button.configure(text="Play" if not playing or self._reader_paused else "Pause",
                                          state="normal" if has_text else "disabled")
+        icon_for_button(self.play_pause_button, self._palette.dark)
         index, count = self._reader_sentence_index() if playing and self._reader_can_navigate else (0, 0)
         self.previous_sentence_button.configure(state="normal" if count > 1 and index > 0 else "disabled")
         self.next_sentence_button.configure(state="normal" if count > 1 and index + 1 < count else "disabled")

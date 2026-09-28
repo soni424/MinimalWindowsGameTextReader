@@ -8,6 +8,8 @@ h3 { font-size:1.25em; }
 p,ul,ol,blockquote,pre,table,details { margin:.65em 0 1em; }
 blockquote { border-left:4px solid var(--line); margin-left:0; padding:.2em 1em; color:var(--muted); }
 ul,ol { padding-left:1.7em; } li { margin:.15em 0; } li>p { margin:.2em 0; }
+ol { list-style:none; }
+.ordered-marker { display:inline-block; min-width:1.6em; margin-left:-1.6em; color:var(--muted); }
 table { display:block; max-width:100%; overflow:auto; border-collapse:collapse; }
 th,td { border:1px solid var(--line); padding:.35em .65em; text-align:left; }
 th { background:var(--code); }

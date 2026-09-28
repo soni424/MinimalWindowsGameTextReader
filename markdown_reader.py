@@ -15,12 +15,14 @@ from mdit_py_plugins.dollarmath import dollarmath_plugin
 from mdit_py_plugins.footnote import footnote_plugin
 from mdit_py_plugins.tasklists import tasklists_plugin
 
-from speech_text import SpeechDocument, SpeechWordSpan, _sentence_spans, structural_pauses
+from speech_text import (SpeechDocument, SpeechWordSpan, _sentence_spans,
+                         ordered_marker_chars, structural_pauses)
 
 
 _WORD = re.compile(r"\w+(?:[\-'’]\w+)*", re.UNICODE)
 _PAUSE = re.compile(r'''[.,!?…;:]["'”’\])}]*$''')
 _LIST = re.compile(r"^\s*(?:[-+*]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)")
+_ORDERED_LIST = re.compile(r"^\s*(\d{1,3})[.)]\s+")
 _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+")
 _QUOTE = re.compile(r"^\s*>\s?")
 _FOOTNOTE = re.compile(r"^\s*\[\^[^]]+\]:\s*")
@@ -41,7 +43,7 @@ _ATTRS = {
     'a': ['href', 'title', 'id'],
     'span': ['data-image-index', 'data-tex'],
     'div': ['data-tex'],
-    'li': ['id'],
+    'ol': ['start'], 'li': ['id', 'value'],
     'input': ['type', 'checked', 'disabled'],
     'th': ['align'], 'td': ['align'],
 }
@@ -222,6 +224,10 @@ def prepare_markdown_for_speech(source: str) -> SpeechDocument:
         prefix = heading or bullet or footnote or quote
         start = prefix.end() if prefix else 0
         if segment:
+            segment.append((' ', cursor + start))
+        numbered = _ORDERED_LIST.match(line) if bullet else None
+        if numbered:
+            segment.extend(ordered_marker_chars(numbered, cursor))
             segment.append((' ', cursor + start))
         segment.extend(_inline_chars(line[start:], cursor + start))
         if heading or bullet or footnote or table:

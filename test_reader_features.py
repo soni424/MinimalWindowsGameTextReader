@@ -122,6 +122,7 @@ class SilentSession:
         self.timing = True
         self.playback_rate = 1.0
         self.supports_rate = True
+        self.poll_calls = 0
     def prepare(self, _voice): pass
     def start(self, request, started, replace=False):
         self.requests.append(request)
@@ -129,7 +130,9 @@ class SilentSession:
         self.paused = False
         self.playback_rate = request.playback_rate
         started()
-    def poll(self): return self.finished and not self.paused
+    def poll(self):
+        self.poll_calls += 1
+        return self.finished and not self.paused
     def seek(self, offset, *, keep_paused=False):
         self.seeks.append((offset, keep_paused))
         self.paused = keep_paused
@@ -230,6 +233,19 @@ class SeekTests(unittest.TestCase):
 
 
 class ReaderTransportTests(unittest.TestCase):
+    def test_long_sapi_reader_splits_at_spoken_boundaries_without_losing_words(self):
+        from tts_engine import _SpeechRequest, _sapi_reader_segments
+        document = prepare_for_speech(' '.join(f'Sentence {i} has several words.' for i in range(30)))
+        request = _SpeechRequest(1, document.spoken_text, 'sapi:voice', 0, 50,
+                                 source_text=document.source_text, word_spans=document.words,
+                                 pauses=document.pauses, document=document, reader_controlled=True)
+        chunks = _sapi_reader_segments(request)
+        self.assertGreater(len(chunks), 2)
+        self.assertLess(len(chunks[0].text), 320)
+        self.assertEqual(' '.join(chunk.text for chunk in chunks), document.spoken_text)
+        self.assertEqual([span.source_start for chunk in chunks for span in chunk.word_spans],
+                         [span.source_start for span in document.words])
+
     def setUp(self):
         self.sessions = []
         self.states = []
@@ -301,6 +317,14 @@ class ReaderTransportTests(unittest.TestCase):
         self.assertIsNotNone(revision)
         self.assertTrue(eventually(lambda: revision.request_id in self.engine._active_requests))
         self.assertEqual(len(self.sessions[0].requests), 1)
+        self.assertTrue(eventually(lambda: list(self.engine._active_requests) == [revision.request_id]))
+        self.assertEqual(self.engine._current_request.request_id, revision.request_id)
+        self.assertEqual(len(self.sessions), 1)
+        # One native session must have one worker owner after seeking. The old
+        # bug polled the same MediaPlayer from both active and reader_active.
+        self.sessions[0].poll_calls = 0
+        time.sleep(.22)
+        self.assertLess(self.sessions[0].poll_calls, 18)
 
     def test_edit_cancels_new_seek_revision_even_with_previous_request_id(self):
         unrelated = self.engine.enqueue("Other voice")
@@ -467,6 +491,14 @@ class ReaderUiTests(unittest.TestCase):
         self.assertEqual(self.store.get()["speech"]["reader_playback_rate"], 1.0)
         self.ui._reflow_reader_actions(700)
         self.assertEqual(int(self.ui.reader_speed_controls.grid_info()["row"]), 1)
+    def test_action_icons_keep_text_and_follow_theme(self):
+        from action_icons import icon_for_button
+        self.assertEqual(self.ui.play_pause_button.cget('text'), 'Play')
+        self.assertTrue(self.ui.play_pause_button.cget('image'))
+        old = self.ui.play_pause_button.cget('image')
+        icon_for_button(self.ui.play_pause_button, not self.ui._palette.dark)
+        self.assertNotEqual(self.ui.play_pause_button.cget('image'), old)
+        self.assertEqual(str(self.ui.play_pause_button.cget('compound')), 'left')
     def test_auto_read_speed_selector_saves_and_rolls_back_on_failure(self):
         def save_speed(speed):
             return self.store.update(auto_read={"speed": speed})["auto_read"]["speed"]
@@ -578,6 +610,38 @@ class ModifierTests(unittest.TestCase):
 
 
 class NativeSeekTests(unittest.TestCase):
+    def test_native_sapi_reader_segments_finish_as_one_request(self):
+        voice = next((item for item in TtsEngine.list_voices() if item.engine == 'sapi'), None)
+        if voice is None:
+            self.skipTest('No SAPI voice is installed')
+        source = ' '.join(
+            f'Sentence {index} explains another observation in the classroom.'
+            for index in range(9))
+        sessions, started, finished, words, errors = [], [], [], [], []
+        def factory():
+            session = _WindowsSpeechSession()
+            sessions.append(session)
+            return session
+        engine = TtsEngine(session_factory=factory,
+            on_started_with_id=lambda *args: started.append(args),
+            on_finished_with_id=lambda *args: finished.append(args),
+            on_word_with_id=lambda *args: words.append(args), on_error=errors.append,
+            initial_voice_id=voice.identifier)
+        try:
+            self.assertTrue(engine.wait_until_ready())
+            document = prepare_for_speech(source)
+            ticket = engine.play_reader(document, voice.identifier, 0, 0, 2.0)
+            self.assertTrue(eventually(lambda: len(started) == 1, 8), errors)
+            self.assertGreater(len(sessions[-1]._reader_segments), 1)
+            self.assertTrue(ticket.wait(25), errors)
+            self.assertGreater(sessions[-1]._reader_segment_index, 0)
+            self.assertEqual(started[0][1], document.spoken_text)
+            self.assertEqual(finished[-1][1], document.spoken_text)
+            self.assertEqual({word[0] for word in words}, {ticket.request_id})
+            self.assertFalse(errors)
+        finally:
+            engine.shutdown()
+
     def test_structured_synthesis_retries_plain_on_backend_rejection(self):
         document = prepare_for_speech('First line.\n\nSecond line.')
         for backend in ('winrt', 'sapi'):
@@ -700,7 +764,12 @@ class NativeSeekTests(unittest.TestCase):
                 self.assertTrue(engine.pause_request(ticket.request_id, source))
                 self.assertTrue(eventually(lambda: states[-1][2], 3), errors)
                 channel = sessions[0]._winrt_current_channel
-                self.assertTrue(eventually(lambda: channel.player.playback_session.can_seek, 3))
+                def can_seek_after_media_initializes():
+                    try:
+                        return channel.player.playback_session.can_seek
+                    except OSError:
+                        return False
+                self.assertTrue(eventually(can_seek_after_media_initializes, 3))
                 target = prepare_for_speech(source).sentences[1].source_start
                 revision = engine.navigate_reader(ticket.request_id, source, target)
                 self.assertIsNotNone(revision)

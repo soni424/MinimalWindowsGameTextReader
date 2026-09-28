@@ -308,10 +308,11 @@ class GameTextReaderApplication:
 
     def _speech_document_started(self, request_id: int, source_text: str) -> None:
         """Give the newest mapped reading highlight ownership immediately."""
-
-        self._schedule(
-            lambda: self.ui.begin_speech_progress(request_id, source_text)
-        )
+        def apply() -> None:
+            self.ui.begin_speech_progress(request_id, source_text)
+            if request_id == getattr(self, '_reader_current_id', None):
+                self.ui.set_status('Reading the text in Last captured text.')
+        self._schedule(apply)
 
     def _speech_word(
         self, request_id: int, source_text: str, source_start: int, source_end: int
@@ -625,7 +626,7 @@ class GameTextReaderApplication:
         ticket = self.tts.replace_reader(document, settings["voice"], settings["rate"], settings["volume"],
                                          settings["speech"]["reader_playback_rate"])
         self._reader_current_id = ticket.request_id
-        self.ui.set_status("Reading the last captured text again.")
+        self.ui.set_status("Preparing the last captured text for speech…")
 
     def reader_play_pause(self, request_id: int | None, source_text: str, paused: bool) -> None:
         if source_text != self.text_state.last_successful_text:
@@ -642,7 +643,7 @@ class GameTextReaderApplication:
         ticket = self.tts.play_reader(document, settings["voice"], settings["rate"], settings["volume"],
                                       settings["speech"]["reader_playback_rate"])
         self._reader_current_id = ticket.request_id
-        self.ui.set_status("Reading the text in Last captured text.")
+        self.ui.set_status("Preparing the text in Last captured text for speech…")
 
     def set_reader_speed(self, request_id: int | None, source_text: str, rate: float) -> float:
         saved = self.config.update(speech={"reader_playback_rate": rate})["speech"]["reader_playback_rate"]

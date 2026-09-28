@@ -1,5 +1,6 @@
 """Markdown Reader preview, safety, and speech mapping regressions."""
 import unittest
+import json
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,21 @@ from settings_ui import SettingsUI
 
 
 class MarkdownReaderTests(unittest.TestCase):
+    def test_ordered_steps_are_spoken_and_mapped_to_source_digits(self):
+        source = ('### 1. How Science Works\n\n' + ''.join(
+            f'{index}. **{name}:** Details.\n' for index, name in enumerate(
+                ('Observation', 'Question', 'Hypothesis', 'Experimentation',
+                 'Analysis', 'Peer Review'), 1)))
+        document = prepare_markdown_for_speech(source)
+        self.assertIn('1. How Science Works.', document.spoken_text)
+        for index, name in enumerate(('Observation', 'Question', 'Hypothesis',
+                                      'Experimentation', 'Analysis', 'Peer Review'), 1):
+            word = ('one', 'two', 'three', 'four', 'five', 'six')[index - 1]
+            self.assertIn(f'{word}: {name}', document.spoken_text)
+            marker = next(span for span in document.words if
+                          document.spoken_text[span.spoken_start:span.spoken_end] == word)
+            self.assertEqual(source[marker.source_start:marker.source_end], str(index))
+
     def test_detection_does_not_switch_plain_paste(self):
         self.assertFalse(looks_like_markdown('I saw it. Another line of dialogue.'))
         self.assertTrue(looks_like_markdown('# A title\n\n**Bold** words'))
@@ -107,6 +123,20 @@ class MarkdownReaderTests(unittest.TestCase):
         self.assertIn("connect-src 'none'", _CSP)
         self.assertIn("frame-src 'none'", _CSP)
 
+    def test_preview_bridge_accepts_only_current_document_word_index(self):
+        preview = MarkdownPreview.__new__(MarkdownPreview)
+        calls = []
+        preview.parent = SimpleNamespace(after=lambda _delay, callback: callback())
+        preview.on_seek = lambda index, source: calls.append((index, source))
+        preview.source = '1. **Observation:** Notice details.'
+        preview.revision = 4
+        preview._ipc_message(json.dumps({'kind': 'seek', 'index': 0, 'revision': 3}))
+        preview._ipc_message(json.dumps({'kind': 'seek', 'index': -1, 'revision': 4}))
+        preview._ipc_message(json.dumps({'kind': 'seek', 'index': True, 'revision': 4}))
+        self.assertEqual(calls, [])
+        preview._ipc_message(json.dumps({'kind': 'seek', 'index': 0, 'revision': 4}))
+        self.assertEqual(calls, [(0, preview.source)])
+
     def test_remote_images_are_sent_to_browser_only_after_explicit_approval(self):
         preview = MarkdownPreview.__new__(MarkdownPreview)
         calls = []
@@ -172,6 +202,31 @@ class MarkdownReaderUiTests(unittest.TestCase):
             self.assertEqual(self.ui.reader_tabs.select(), str(self.ui.captured_text_frame))
             self.assertEqual(self.ui.prepare_reader_document('Plain OCR text.').spoken_text,
                              'Plain OCR text.')
+
+    def test_preview_seek_uses_current_active_document_only(self):
+        source = '1. **Observation:** Notice details.'
+        seeks = []
+        self.ui.on_seek = lambda *args: seeks.append(args)
+        self.ui.captured_text.insert('1.0', source)
+        self.ui._markdown_mode = True
+        self.ui.begin_speech_progress(7, source)
+        self.ui._preview_seek_word(0, source)
+        self.assertEqual(seeks, [(7, source, source.index('1'))])
+        self.ui._preview_seek_word(0, 'old document')
+        self.ui.clear_speech_progress(7)
+        self.ui._preview_seek_word(0, source)
+        self.assertEqual(len(seeks), 1)
+
+    def test_prepared_markdown_is_reused_until_source_changes(self):
+        source = '# Science\n\n1. **Observation:** Notice details.'
+        self.ui.captured_text.insert('1.0', source)
+        self.ui._markdown_mode = True
+        first = self.ui.prepare_reader_document(source)
+        self.assertIs(self.ui.prepare_reader_document(source), first)
+        self.ui.captured_text.insert('end', '\n2. Question')
+        self.ui._captured_text_modified()
+        changed = self.ui.captured_text.get('1.0', 'end-1c')
+        self.assertIsNot(self.ui.prepare_reader_document(changed), first)
 
     def test_preview_follows_theme_and_document_words_remain_source_mapped(self):
         source = '# Heading\n\nWord and Word.'

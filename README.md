@@ -43,6 +43,13 @@ The first run opens settings and creates a tray icon. Closing the settings windo
 
 ## What's new
 
+### Development build: 1.2.9-dev
+
+- Numbered steps in Markdown and structured text are spoken as “one,” “two,” and so on, while headings, ordinary numbers, and decimals remain intact. Number highlights map back to the original digits.
+- Double-click the current passage in either Edit or Preview to seek to that word. Repeated seeks replace the previous Reader stream rather than leaving overlapping narration. Preview accepts only a word index from the current local document.
+- Long Reader passages using SAPI start with a short synthesized opening and prepare following segments during playback. This reduces the wait after pasting a long document; the selected voice is retained. The preparing message remains until speech actually starts.
+- Action labels now have Dark/Light, DPI-aware line icons throughout the app. The native title bar, control names, and shortcuts are unchanged.
+
 ### Development build: 1.2.8-dev
 
 - Reader playback now adds short pauses between list items, clearer pauses between paragraphs and nested list levels, and a longer pause at section dividers. This applies to Markdown, plain text, OCR captures, and Auto-Read; ordinary wrapped lines stay continuous.
@@ -118,7 +125,7 @@ On wide windows, the **Reader** places profiles, capture buttons, OCR mode, and 
 4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
 5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
 
-To read a Markdown document, paste it into **Last captured text**. The Reader opens **Preview** for recognizable Markdown; switch to **Edit** to change its source. You can also open Preview manually for any text. The toolbar's **Copy** action copies the source, while selecting text within Preview copies the rendered text. The Preview's **Load remote images** button is an explicit per-document choice; images do not load automatically. Reader speech uses the formatted prose in either tab, and switching tabs does not change the source or restart a reading.
+To read a Markdown document, paste it into **Last captured text**. The Reader opens **Preview** for recognizable Markdown; switch to **Edit** to change its source. You can also open Preview manually for any text. The toolbar's **Copy** action copies the source, while selecting text within Preview copies the rendered text. The Preview's **Load remote images** button is an explicit per-document choice; images do not load automatically. Reader speech uses the formatted prose in either tab, including numbered list steps. Double-click a word during playback in either tab to continue from that occurrence; switching tabs does not change the source or restart a reading.
 
 In **Last captured text**, use **Play** to begin the visible passage, **Pause** to hold its audio and highlighted word, and **Play** again to resume. **Previous sentence** and **Next sentence** jump across spoken sentence boundaries, including headings and bullet items; an ordinary wrapped OCR line stays in its sentence. Skipping while paused stays paused. The controls follow only the current passage and leave other voices alone. If a voice supplies no word timing, Play/Pause remains available but sentence skipping is disabled.
 
@@ -222,3 +229,5 @@ To regenerate the exported icon assets on Windows with Microsoft Edge and Pillow
 ```powershell
 python tools/build_icon_assets.py
 ```
+
+Button icons are separate themed line assets in `assets/action_icons`. To regenerate their 16, 24, and 32 px versions with Pillow, run `python tools/build_action_icons.py`.

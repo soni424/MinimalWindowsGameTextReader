@@ -11,10 +11,12 @@ from speech_text import prepare_for_speech
 
 
 class ReaderUpgradeTests(unittest.TestCase):
-    def test_numbered_word_maps_to_content_not_list_marker(self):
-        for text in ('1. 1 survivor remains.', 'A. A hero waits.'):
-            doc = prepare_for_speech(text)
-            self.assertEqual(doc.words[0].source_start, 3)
+    def test_numbered_marker_and_content_have_distinct_source_positions(self):
+        numbered = prepare_for_speech('1. 1 survivor remains.')
+        self.assertEqual(numbered.spoken_text, 'one: 1 survivor remains.')
+        self.assertEqual([word.source_start for word in numbered.words[:2]], [0, 3])
+        alphabetic = prepare_for_speech('A. A hero waits.')
+        self.assertEqual(alphabetic.words[0].source_start, 3)
 
     def test_released_modifier_is_not_recorded(self):
         recorder = _ShortcutRecorderDialog.__new__(_ShortcutRecorderDialog)

@@ -61,6 +61,13 @@ class WindowsComponentTests(unittest.TestCase):
         self.assertIn('datas = [("assets", "assets")]', spec)
         self.assertIn('icon="assets/app_icon.ico"', spec)
         self.assertIn('manifest="assets/GameTextReader.manifest"', spec)
+        action_root = Path(__file__).parent / 'assets' / 'action_icons'
+        for palette in ('dark', 'light', 'primary'):
+            for size in (16, 24, 32):
+                path = action_root / palette / str(size) / 'play.png'
+                self.assertTrue(path.is_file(), path)
+                with Image.open(path) as action:
+                    self.assertEqual(action.size, (size, size))
 
     def test_tray_start_reports_success_and_failure(self) -> None:
         class Menu:

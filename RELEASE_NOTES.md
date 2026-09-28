@@ -1,6 +1,15 @@
-# Game Text Reader 1.2.7-dev
+# Game Text Reader 1.2.9-dev
 
 Development build for testing before a stable release.
+
+## Markdown narration and Reader seeking
+
+- Ordered Markdown and plain-text steps now speak their numbers as cardinal words (for example, “one: Observation”); headings, quantities, and decimals keep their existing reading.
+- Double-click a spoken word in Edit or Preview to continue from that occurrence. Preview sends only a current-document word index to the app, and old seek revisions cannot leave a second Reader stream active.
+- Long passages with a selected SAPI voice begin from a short opening segment while later segments are prepared during playback. Playback stays tied to one logical Reader request, including its highlights, controls, and structural pauses. The app displays a preparing status until audio starts.
+- Prominent actions across Reader, OCR corrections, Voice & shortcuts, and dialogs now have theme-aware line icons beside their text. The native Windows title bar and existing shortcuts are unchanged.
+
+## Previous development build: 1.2.8-dev
 
 ## Markdown Reader preview
 

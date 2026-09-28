@@ -119,6 +119,7 @@ class _SpeechRequest:
     reader_controlled: bool = False
     playback_rate: float = 1.0
     rate_result_sent: bool = False
+    report_text: str = ""
 
 
 class _SapiWordEventSink:
@@ -205,6 +206,46 @@ def _normalise_reader_rate(value: object) -> float:
     return round(max(0.5, min(2.0, rate)) * 10) / 10
 
 
+def _sapi_reader_segments(request: _SpeechRequest, limit: int = 280) -> tuple[_SpeechRequest, ...]:
+    """Split a long Reader passage at sentence/word boundaries, retaining source spans."""
+    if not request.reader_controlled or not request.voice_id.startswith('sapi:') or len(request.text) <= 420:
+        return ()
+    words = request.word_spans
+    if not words:
+        return ()
+    boundaries = {sentence.spoken_end for sentence in
+                  (request.document.sentences if request.document else ())}
+    pieces = []
+    first = 0
+    while first < len(words):
+        start = words[first].spoken_start
+        last = first
+        preferred = None
+        while last + 1 < len(words) and words[last + 1].spoken_end - start <= limit:
+            if words[last].spoken_end in boundaries and words[last].spoken_end - start >= 130:
+                preferred = last
+            last += 1
+        if preferred is not None:
+            last = preferred
+        end = words[last + 1].spoken_start if last + 1 < len(words) else len(request.text)
+        # Include punctuation following the last word, but never the next word.
+        text = request.text[start:end].rstrip()
+        if not text:
+            break
+        length = len(text)
+        spans = tuple(SpeechWordSpan(w.spoken_start - start, w.spoken_end - start,
+                                     w.source_start, w.source_end)
+                      for w in words[first:last + 1])
+        pauses = tuple(SpeechPause(p.spoken_offset - start, p.source_offset, p.milliseconds)
+                       for p in request.pauses if start <= p.spoken_offset < start + length)
+        pieces.append(_SpeechRequest(request.request_id, text, request.voice_id, request.rate,
+                                     request.volume, source_text=request.source_text,
+                                     word_spans=spans, pauses=pauses,
+                                     playback_rate=request.playback_rate))
+        first = last + 1
+    return tuple(pieces) if len(pieces) > 1 else ()
+
+
 class _WindowsSpeechSession:
     """Own worker-thread speech synthesis and isolated MediaPlayer channels."""
 
@@ -235,6 +276,10 @@ class _WindowsSpeechSession:
         self._playback_rate_error = ""
         self._pending_playback_rate: float | None = None
         self._pending_rate_since = 0.0
+        self._reader_segments: tuple[_SpeechRequest, ...] = ()
+        self._reader_segment_index = 0
+        self._reader_segment_owner: _SpeechRequest | None = None
+        self._reader_prefetched: tuple[bytes, tuple[_WordTiming, ...]] | None = None
 
     def prepare(self, voice_id: str) -> None:
         # All playback uses MediaPlayer. SAPI is only a synthesizer for SAPI
@@ -267,6 +312,9 @@ class _WindowsSpeechSession:
             return
         self.prepare(request.voice_id)
         if request.voice_id.startswith("winrt:"):
+            self._reader_segments = ()
+            self._reader_prefetched = None
+            self._reader_segment_owner = None
             self._start_winrt(request, on_started, replace)
         else:
             self._start_sapi(request, on_started, replace)
@@ -282,7 +330,20 @@ class _WindowsSpeechSession:
             return True
         if channel.failed.is_set():
             raise TtsError(channel.error or "Windows media playback failed.")
+        if (self._reader_segments and not self._paused_at
+                and self._reader_prefetched is None
+                and self._reader_segment_index + 1 < len(self._reader_segments)):
+            next_piece = self._reader_segments[self._reader_segment_index + 1]
+            self._reader_prefetched = self._sapi_segment_audio(next_piece)
         if channel.finished.is_set():
+            if (self._reader_segments and self._reader_segment_owner is not None
+                    and self._reader_segment_index + 1 < len(self._reader_segments)):
+                self._reader_segment_index += 1
+                next_piece = self._reader_segments[self._reader_segment_index]
+                data = self._reader_prefetched or self._sapi_segment_audio(next_piece)
+                self._reader_prefetched = None
+                self._play_sapi_segment(self._reader_segment_owner, next_piece, data, lambda: None)
+                return False
             self._retire_current_channel()
             return True
         if self._paused_at:
@@ -305,6 +366,9 @@ class _WindowsSpeechSession:
         self._active_backend = ""
         self._winrt_deadline = 0.0
         self._paused_at = 0.0
+        self._reader_segments = ()
+        self._reader_prefetched = None
+        self._reader_segment_owner = None
 
     def pause(self) -> bool:
         channel = self._winrt_current_channel
@@ -874,26 +938,67 @@ class _WindowsSpeechSession:
         on_started: Callable[[], None],
         replace: bool = False,
     ) -> None:
-        try:
-            wav_data = self._synthesise_sapi_wav(request)
-        except TtsError:
-            if not request.pauses:
-                raise
-            wav_data = self._synthesise_sapi_wav(request, structured=False)
+        self._reader_segments = _sapi_reader_segments(request)
+        self._reader_segment_index = 0
+        self._reader_segment_owner = request if self._reader_segments else None
+        self._reader_prefetched = None
+        piece = self._reader_segments[0] if self._reader_segments else request
+        data = self._sapi_segment_audio(piece)
         if request.cancel.is_set():
+            return
+        self._play_sapi_segment(request, piece, data, on_started, replace)
+
+    def _sapi_segment_audio(self, piece: _SpeechRequest) -> tuple[bytes, tuple[_WordTiming, ...]]:
+        try:
+            wav_data = self._synthesise_sapi_wav(piece)
+        except TtsError:
+            if not piece.pauses:
+                raise
+            wav_data = self._synthesise_sapi_wav(piece, structured=False)
+        timings = self._sapi_word_timings
+        leading_ms = max((pause.milliseconds for pause in piece.pauses
+                          if pause.spoken_offset == 0), default=0)
+        if leading_ms:
+            with wave.open(io.BytesIO(wav_data), 'rb') as source:
+                params = source.getparams()
+                frames = source.readframes(source.getnframes())
+            silent_frames = round(params.framerate * leading_ms / 1000)
+            silence = b'\0' * (silent_frames * params.nchannels * params.sampwidth)
+            output = io.BytesIO()
+            with wave.open(output, 'wb') as target:
+                target.setparams(params)
+                target.writeframes(silence + frames)
+            wav_data = output.getvalue()
+            timings = tuple(_WordTiming(word.seconds + leading_ms / 1000,
+                                        word.spoken_start, word.spoken_end)
+                            for word in timings)
+        return wav_data, timings
+
+    def _play_sapi_segment(
+        self, owner: _SpeechRequest, piece: _SpeechRequest,
+        audio: tuple[bytes, tuple[_WordTiming, ...]],
+        on_started: Callable[[], None], replace: bool = False,
+    ) -> None:
+        wav_data, timings = audio
+        if owner.cancel.is_set():
             return
         stream = self._bytes_to_winrt_stream(wav_data)
         with wave.open(io.BytesIO(wav_data), "rb") as wav_file:
             frame_rate = max(1, wav_file.getframerate())
             duration = max(0.4, wav_file.getnframes() / frame_rate)
         try:
+            owner.text = piece.text
+            owner.word_spans = piece.word_spans
+            owner.pauses = piece.pauses
+            owner.native_offsets = piece.native_offsets
+            owner.spoken_to_native = piece.spoken_to_native
             self._start_stream(
                 stream,
                 on_started,
                 replace,
                 duration,
-                self._sapi_word_timings,
-                request.playback_rate,
+                timings,
+                owner.playback_rate,
             )
         except Exception:
             self._close_stream(stream)
@@ -1148,6 +1253,7 @@ class TtsEngine:
             document=document,
             reader_controlled=reader_controlled,
             playback_rate=_normalise_reader_rate(playback_rate) if reader_controlled else 1.0,
+            report_text=clean,
         )
         if self._shutdown.is_set():
             request.cancel.set()
@@ -1277,7 +1383,7 @@ class TtsEngine:
                                      spoken_to_native=active.spoken_to_native, pauses=active.pauses,
                                      document=active.document,
                                      reader_controlled=active.reader_controlled,
-                                     playback_rate=active.playback_rate)
+                                     playback_rate=active.playback_rate, report_text=active.report_text)
         self._put_command(_SpeechCommand('seek', request, target_id=request_id, source_offset=source_offset))
         return ticket
 
@@ -1327,7 +1433,7 @@ class TtsEngine:
                                     document=request.document,
                                     paused=request.paused, can_navigate=True,
                                     reader_controlled=request.reader_controlled,
-                                    playback_rate=request.playback_rate)
+                                    playback_rate=request.playback_rate, report_text=request.report_text)
         self._put_command(_SpeechCommand("reader_seek", sought, target_id=request.request_id,
                                          source_offset=source_offset))
         return ticket
@@ -1448,14 +1554,15 @@ class TtsEngine:
     def _finish_request(self, request: _SpeechRequest) -> None:
         if request.completion is not None and request.completion.is_set():
             return
+        reported = request.report_text or request.text
         if self._on_finished:
             try:
-                self._on_finished(request.text)
+                self._on_finished(reported)
             except Exception:
                 pass
         if self._on_finished_with_id:
             try:
-                self._on_finished_with_id(request.request_id, request.text)
+                self._on_finished_with_id(request.request_id, reported)
             except Exception:
                 pass
         if request.completion is not None:
@@ -1463,14 +1570,15 @@ class TtsEngine:
 
     def _notify_started(self, request: _SpeechRequest) -> None:
         started_at = time.perf_counter()
+        reported = request.report_text or request.text
         if self._on_started:
             try:
-                self._on_started(request.text, started_at)
+                self._on_started(reported, started_at)
             except Exception:
                 pass
         if self._on_started_with_id:
             try:
-                self._on_started_with_id(request.request_id, request.text, started_at)
+                self._on_started_with_id(request.request_id, reported, started_at)
             except Exception:
                 pass
         if self._on_document_started_with_id and request.word_spans:
@@ -2054,6 +2162,8 @@ class TtsEngine:
                                 if len(self._seek_aliases) > 128:
                                     self._seek_aliases.pop(next(iter(self._seek_aliases)))
                             if moved:
+                                reader_active.pop(target_id, None)
+                                overlap_active.pop(target_id, None)
                                 active = sought
                                 self._unregister_overlap(target)
                                 self._set_active(sought)
@@ -2073,6 +2183,8 @@ class TtsEngine:
                                 sought.native_offsets = native_offset_map(sought.text)
                                 sought.spoken_to_native = ()
                                 self._unregister_overlap(target)
+                                reader_active.pop(target_id, None)
+                                overlap_active.pop(target_id, None)
                                 active = self._start_request(sought, replace=True)
                         elif command.kind == "speak" and command.request is not None:
                             request = command.request

@@ -36,7 +36,7 @@ class SpeechTextTests(unittest.TestCase):
     def test_common_numbered_and_dash_lists_are_supported(self) -> None:
         self.assertEqual(
             format_for_speech("1. First\n2) Second\n- Third"),
-            "First. Second. Third.",
+            "one: First. two: Second. Third.",
         )
 
     def test_empty_text_stays_empty(self) -> None:
@@ -48,15 +48,15 @@ class SpeechTextTests(unittest.TestCase):
 
         self.assertEqual(
             document.spoken_text,
-            "Sentinel 27's Testimony. First item. Naytiba's second item.",
+            "Sentinel 27's Testimony. one: First item. Naytiba's second item.",
         )
         self.assertEqual(
             [source[word.source_start : word.source_end] for word in document.words],
-            ["Sentinel", "27's", "Testimony", "First", "item", "Naytiba's", "second", "item"],
+            ["Sentinel", "27's", "Testimony", "1", "First", "item", "Naytiba's", "second", "item"],
         )
         self.assertEqual(
             [document.spoken_text[word.spoken_start : word.spoken_end] for word in document.words],
-            ["Sentinel", "27's", "Testimony", "First", "item", "Naytiba's", "second", "item"],
+            ["Sentinel", "27's", "Testimony", "one", "First", "item", "Naytiba's", "second", "item"],
         )
 
     def test_repeated_words_and_compacted_whitespace_keep_forward_mapping(self) -> None:
@@ -74,11 +74,11 @@ class SpeechTextTests(unittest.TestCase):
         document = prepare_for_speech(source)
         self.assertEqual(
             [source[part.source_start:part.source_end] for part in document.sentences],
-            ["Sentinel's Testimony", "Dr. Smith saw 3.14 clues", "First item", "Second item"],
+            ["Sentinel's Testimony", "1. Dr. Smith saw 3.14 clues", "First item", "Second item"],
         )
         self.assertEqual(
             [document.spoken_text[part.spoken_start:part.spoken_end] for part in document.sentences],
-            ["Sentinel's Testimony", "Dr. Smith saw 3.14 clues", "First item", "Second item"],
+            ["Sentinel's Testimony", "one: Dr. Smith saw 3.14 clues", "First item", "Second item"],
         )
 
     def test_wrapped_line_and_unicode_stay_in_one_sentence(self) -> None:

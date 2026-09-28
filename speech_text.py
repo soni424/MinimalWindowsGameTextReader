@@ -7,10 +7,35 @@ from dataclasses import dataclass
 from xml.sax.saxutils import escape
 
 _BULLET_PREFIX = re.compile(r"^\s*(?:(?:[•◦▪‣⁃∙·●○■□◆◇▶►*]|[-–—])\s+|(?:\d{1,3}|[A-Za-z])[.)]\s+)")
+_ORDERED_PREFIX = re.compile(r"^\s*(\d{1,3})[.)]\s+")
 _TRAILING_PAUSE = re.compile(r'''[.,!?…;:]["'”’\])}]*$''')
 _WORD = re.compile(r"\w+(?:[\-'’]\w+)*", re.UNICODE)
 _SENTENCE_END = re.compile(r"[.!?…]+[\"'”’\])}]*\s*$")
 _ABBREVIATIONS = frozenset({'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'vs', 'etc'})
+
+
+def cardinal_number(value: int) -> str:
+    """Small ordered-list labels, distinct from ordinary quantities and decimals."""
+    ones = ('zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+            'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen',
+            'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen')
+    tens = ('', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy',
+            'eighty', 'ninety')
+    if value < 20:
+        return ones[value]
+    if value < 100:
+        return tens[value // 10] + (f'-{ones[value % 10]}' if value % 10 else '')
+    return ones[value // 100] + ' hundred' + (f' {cardinal_number(value % 100)}' if value % 100 else '')
+
+
+def ordered_marker_chars(match: re.Match[str], offset: int) -> list[tuple[str, int | None]]:
+    """Map a spoken cardinal to its original marker digits."""
+    digits = match.group(1)
+    start = offset + match.start(1)
+    end = offset + match.end(1) - 1
+    spoken = cardinal_number(int(digits)) + ':'
+    return [(char, start if index < len(spoken) - 2 else end)
+            for index, char in enumerate(spoken)]
 
 
 @dataclass(frozen=True)
@@ -220,9 +245,14 @@ def prepare_for_speech(text: str) -> SpeechDocument:
             cursor += len(raw_line)
             continue
         bullet = _BULLET_PREFIX.match(line)
+        numbered = _ORDERED_PREFIX.match(line)
         content_start = bullet.end() if bullet else 0
         if bullet:
             flush()
+        if numbered:
+            for char, origin in ordered_marker_chars(numbered, cursor):
+                segment.append(char)
+                positions.append(origin)
         for token in re.finditer(r'\S+', line[content_start:]):
             if segment:
                 segment.append(' ')
