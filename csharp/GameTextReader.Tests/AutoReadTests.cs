@@ -78,6 +78,14 @@ public sealed class AutoReadTests
         var f = new Fixture { Failures = 2 }; using var watcher = f.Watcher(); var result = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); watcher.Line += (_, _, _) => result.TrySetResult(); watcher.Start(Fixture.Area); await result.Task.WaitAsync(TimeSpan.FromSeconds(5)); Assert.That(f.Time - 10000, Is.GreaterThanOrEqualTo(6000));
     }
     [Test]
+    public void StopReportsThatAutoReadIsOffOnlyWhenItWasRunning()
+    {
+        var f = new Fixture(); using var watcher = f.Watcher(); var messages = new System.Collections.Concurrent.ConcurrentQueue<string>(); watcher.Status += (message, _) => messages.Enqueue(message);
+        watcher.Stop(); Assert.That(messages, Is.Empty, "Stopping an idle watcher must not report a change.");
+        watcher.Start(Fixture.Area); Assert.That(watcher.Active, Is.True); watcher.Stop();
+        Assert.That(watcher.Active, Is.False); Assert.That(messages, Does.Contain("Auto-Read is off."), "Every caller that stops Auto-Read must let the UI show it as off.");
+    }
+    [Test]
     public async Task ThreeScreenshotErrorsStopWithExplanation()
     {
         var f = new Fixture { Failures = 3 }; using var watcher = f.Watcher(); var result = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously); watcher.Status += (message, error) => { if (error && message.Contains("stopped")) result.TrySetResult(message); }; watcher.Start(Fixture.Area); Assert.That(await result.Task.WaitAsync(TimeSpan.FromSeconds(5)), Does.Contain("repeated errors")); Assert.That(watcher.Active, Is.False);

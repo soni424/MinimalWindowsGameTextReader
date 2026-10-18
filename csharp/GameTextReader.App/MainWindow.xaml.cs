@@ -54,7 +54,7 @@ public partial class MainWindow : Window
         this.noIntegrations = noIntegrations; store = new(settingsPath);
         try { settings = store.Load(settingsPath == null ? new[] { Path.Combine(AppContext.BaseDirectory, "config.json"), Path.Combine(AppContext.BaseDirectory, "_internal", "config.json") } : []); }
         catch (Exception e) { settings = store.Current.Clone(); MessageBox.Show("Settings could not be loaded. The existing file was preserved.\n" + e.Message, "Game Text Reader"); }
-        capture = new(corrector); auto = new(capture, () => store.Current.Clone()); InitializeComponent();
+        capture = new(corrector); auto = new(capture, () => store.Current.Clone(), desktop.AutoReadEnvironment); InitializeComponent();
         Editor.TextArea.TextView.BackgroundRenderers.Add(marker); Editor.TextArea.TextView.LineTransformers.Add(marker); BuildShortcutRows(); BuildContextMenu();
         if (settings.Theme == "system") settings.Theme = NativeDesktop.DarkSystemTheme() ? "dark" : "light";
         OcrMode.ItemsSource = new[] { "Standard", "Enhanced" }; AutoSpeed.ItemsSource = new[] { "Normal", "Fast", "Instant" }; CorrectionStrength.ItemsSource = new[] { "Conservative", "Balanced", "Strong" }; SpeechMode.ItemsSource = new[] { "Replace current line", "Queue next line", "Allow overlapping lines" }; MaxOverlap.ItemsSource = new[] { 2, 3, 4 };
@@ -183,9 +183,26 @@ public partial class MainWindow : Window
     }
     private async void SelectSnippet(object sender, RoutedEventArgs e)
     {
-        if (SelectionOverlay.IsOpen) return; if (IsVisible) WindowState = WindowState.Minimized; var result = await SelectionOverlay.SelectAsync(null, false); if (result != null) await CaptureManual(result);
+        if (SelectionOverlay.IsOpen) return; var restore = IsVisible && WindowState != WindowState.Minimized; if (IsVisible) WindowState = WindowState.Minimized;
+        var result = await SelectionOverlay.SelectAsync(null, false); if (result == null) { if (restore) ShowSettings(); return; }
+        await CaptureManual(result);
     }
-    private async void ReadFixed(object sender, RoutedEventArgs e) { try { await CaptureManual(CaptureGeometry.Resolve(settings.SelectedProfile.Area, NativeDesktop.Monitors())); } catch (Exception error) { SetStatus(error.Message); } }
+    private async void ReadFixed(object sender, RoutedEventArgs e) => await ReadFixedBox(false);
+    private async Task ReadFixedBox(bool shortcut)
+    {
+        try
+        {
+            var box = CaptureGeometry.Resolve(settings.SelectedProfile.Area, NativeDesktop.Monitors());
+            // Keep this window out of its own screenshot, as the Python build did. A shortcut
+            // pressed in a game leaves the game on top, so only wait when this window may show.
+            var covers = IsVisible && WindowState != WindowState.Minimized && NativeDesktop.GetWindowRect(new WindowInteropHelper(this).Handle, out var r) && r.Left < box[2] && r.Right > box[0] && r.Top < box[3] && r.Bottom > box[1];
+            var onScreen = covers && (IsActive || !shortcut);
+            if (IsVisible && (shortcut || covers)) WindowState = WindowState.Minimized;
+            if (onScreen) { await Task.Delay(SystemParameters.MinimizeAnimation ? 300 : 0); NativeDesktop.FlushCompositor(); }
+            await CaptureManual(box);
+        }
+        catch (Exception error) { SetStatus(error.Message); }
+    }
     private async Task CaptureManual(int[] box)
     {
         auto.ManualStarted(); manualCapture?.Cancel(); var job = new CancellationTokenSource(); manualCapture = job; SetStatus("Reading screen text…");
@@ -398,7 +415,8 @@ public partial class MainWindow : Window
     private void StopAudio(object sender, RoutedEventArgs e) { auto.Stop(); speech.StopAll(); InvalidateReading(); SetStatus("Audio and Auto-Read stopped."); }
     private void OcrModeChanged(object sender, SelectionChangedEventArgs e) { if (initializing || OcrMode.SelectedItem is not string s) return; settings.Ocr.RecognitionMode = s.ToLowerInvariant(); Persist(); }
     private void AutoSpeedChanged(object sender, SelectionChangedEventArgs e) { if (initializing || AutoSpeed.SelectedItem is not string s) return; settings.AutoRead.Speed = s.ToLowerInvariant(); if (!Persist()) { initializing = true; AutoSpeed.SelectedItem = TitleCase(settings.AutoRead.Speed); initializing = false; } }
-    private void ToggleAuto(object sender, RoutedEventArgs e) { if (auto.Active) { auto.Stop(); AutoButton.Content = "Start Auto-Read"; AutoStatus.Text = "Auto-Read is off."; } else { try { var area = settings.SelectedProfile.Area ?? throw new InvalidOperationException("Set a capture area first."); _ = CaptureGeometry.Resolve(area, NativeDesktop.Monitors()); auto.Start(area); AutoButton.Content = "Stop Auto-Read"; } catch (Exception error) { SetStatus(error.Message); } } }
+    // The watcher's Status event updates the button for every start and stop.
+    private void ToggleAuto(object sender, RoutedEventArgs e) { if (auto.Active) auto.Stop(); else { try { var area = settings.SelectedProfile.Area ?? throw new InvalidOperationException("Set a capture area first."); _ = CaptureGeometry.Resolve(area, NativeDesktop.Monitors()); auto.Start(area); } catch (Exception error) { SetStatus(error.Message); } } }
     private void CorrectionOptionsChanged(object sender, RoutedEventArgs e) { if (initializing) return; settings.Ocr.Enabled = CorrectionEnabled.IsChecked == true; settings.Ocr.DebugLogging = DebugLogging.IsChecked == true; Persist(); }
     private void CorrectionStrengthChanged(object sender, SelectionChangedEventArgs e) { if (initializing || CorrectionStrength.SelectedItem is not string s) return; settings.Ocr.Strength = s.ToLowerInvariant(); Persist(); }
     private void SaveProtected(object sender, RoutedEventArgs e) { settings.Ocr.ProtectedWords = ProtectedTerms.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); Persist(); SetStatus("Protected terms saved."); }
@@ -442,7 +460,7 @@ public partial class MainWindow : Window
     {
         if (quitting) return;
         DebugLog("Shortcut dispatched: " + index);
-        switch (index) { case 0: if (IsVisible) WindowState = WindowState.Minimized; ReadFixed(this, new()); break; case 1: if (IsVisible) WindowState = WindowState.Minimized; SelectSnippet(this, new()); break; case 2: ReadAgain(this, new()); break; case 3: ToggleAuto(this, new()); break; }
+        switch (index) { case 0: _ = ReadFixedBox(true); break; case 1: if (IsVisible) WindowState = WindowState.Minimized; SelectSnippet(this, new()); break; case 2: ReadAgain(this, new()); break; case 3: ToggleAuto(this, new()); break; }
     }
     private void StartupChanged(object sender, RoutedEventArgs e)
     {

@@ -228,6 +228,47 @@ public class UiTests
         finally { CloseFixture(window, folder); }
     }
     [Test]
+    public void AutoReadButtonShowsOffAfterStopAudioAndToggle()
+    {
+        EnsureApplication(); var folder = Path.Combine(Path.GetTempPath(), "gtr-auto-button-test-" + Guid.NewGuid()); Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "config.json"); var store = new ConfigStore(path); var settings = store.Load(); var monitors = NativeDesktop.Monitors(); var m = monitors[0];
+        settings.SelectedProfile.Area = CaptureGeometry.Build([m.Left + 20, m.Top + 20, m.Left + 220, m.Top + 80], monitors); settings.Volume = 0; store.Save(settings);
+        // No game is ever foreground, so the watcher waits without taking screenshots.
+        var screenshots = 0; var services = new DesktopServices { AutoReadEnvironment = new() { Foreground = _ => null, Grab = _ => { Interlocked.Increment(ref screenshots); throw new InvalidOperationException("This test must not capture the screen."); } } };
+        var window = new MainWindow(path, true, services); window.Show();
+        try
+        {
+            var button = (Button)window.FindName("AutoButton"); var status = (TextBlock)window.FindName("AutoStatus");
+            string Label() => button.Content is StackPanel panel ? panel.Children.OfType<TextBlock>().LastOrDefault()?.Text ?? "" : button.Content?.ToString() ?? "";
+            void Click() => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            void AssertOff(string action) { PumpUntil(() => Label() == "Start Auto-Read" && status.Text == "Auto-Read is off."); Assert.That(button.Content, Is.InstanceOf<StackPanel>(), action + " must keep the button icon."); Assert.That(button.Tag, Is.EqualTo("play"), action + " must show the start icon."); }
+            Click(); PumpUntil(() => Label() == "Stop Auto-Read" && Equals(button.Tag, "stop"));
+            typeof(MainWindow).GetMethod("StopAudio", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [window, new RoutedEventArgs()]); AssertOff("Stop audio");
+            Click(); PumpUntil(() => Label() == "Stop Auto-Read"); Click(); AssertOff("Stop Auto-Read");
+            Assert.That(screenshots, Is.Zero);
+        }
+        finally { CloseFixture(window, folder); }
+    }
+    [Test]
+    public void ClosingAnOverlayWindowCancelsTheSelection()
+    {
+        EnsureApplication(); Exception? unhandled = null; void Record(object? _, DispatcherUnhandledExceptionEventArgs e) { unhandled ??= e.Exception; e.Handled = true; }
+        Dispatcher.CurrentDispatcher.UnhandledException += Record;
+        try
+        {
+            // Alt+F4 or an external WM_CLOSE must cancel like Esc, not leave the overlay stuck open.
+            var selection = SelectionOverlay.SelectAsync(null, false); var pane = Application.Current.Windows.OfType<Window>().First(w => w.WindowStyle == WindowStyle.None && w.IsVisible);
+            pane.Close(); PumpUntil(() => selection.IsCompleted, 5000);
+            Assert.That(unhandled, Is.Null, "Closing an overlay window must not throw."); Assert.That(selection.Result, Is.Null);
+            Assert.That(SelectionOverlay.IsOpen, Is.False, "A later snippet must be able to open."); Assert.That(Application.Current.Windows.OfType<Window>().Any(w => w.WindowStyle == WindowStyle.None && w.IsVisible), Is.False);
+        }
+        finally
+        {
+            Dispatcher.CurrentDispatcher.UnhandledException -= Record;
+            foreach (var overlay in Application.Current.Windows.OfType<Window>().Where(w => w.WindowStyle == WindowStyle.None && PresentationSource.FromVisual(w) != null).ToArray()) overlay.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(overlay), 0, Key.Escape) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+        }
+    }
+    [Test]
     public void TrayFailureMakesSignInLaunchVisibleWithoutChangingStartupPreference()
     {
         EnsureApplication(); var folder = Path.Combine(Path.GetTempPath(), "gtr-tray-test-" + Guid.NewGuid()); Directory.CreateDirectory(folder);

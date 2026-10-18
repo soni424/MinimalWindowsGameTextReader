@@ -36,6 +36,10 @@ public static class NativeDesktop
     [DllImport("user32.dll")] private static extern nint GetDC(nint window);
     [DllImport("user32.dll")] private static extern int ReleaseDC(nint window, nint dc);
     [DllImport("gdi32.dll", SetLastError = true)] private static extern bool BitBlt(nint target, int x, int y, int width, int height, nint source, int sourceX, int sourceY, uint operation);
+    [DllImport("dwmapi.dll")] private static extern int DwmFlush();
+    // Screen captures read the last composed frame. Wait for the next one so a
+    // window that was just closed or minimized is no longer in the screenshot.
+    public static void FlushCompositor() { try { DwmFlush(); } catch (DllNotFoundException) { } }
     public static IReadOnlyList<MonitorInfo> Monitors()
     {
         var result = new List<MonitorInfo>();

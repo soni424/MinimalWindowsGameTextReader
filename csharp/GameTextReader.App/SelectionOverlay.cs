@@ -29,7 +29,7 @@ public sealed class SelectionOverlay
             var window = new Window { WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, AllowsTransparency = true, Background = Brushes.Transparent, Topmost = true, ShowInTaskbar = false, Content = canvas, Cursor = Cursors.Cross, Width = monitor.Width * 96d / monitor.DpiX, Height = monitor.Height * 96d / monitor.DpiY };
             var pane = new Pane(monitor, window, canvas); panes.Add(pane);
             window.SourceInitialized += (_, _) => { var hwnd = new WindowInteropHelper(window).Handle; NativeDesktop.SetWindowPos(hwnd, -1, monitor.Left, monitor.Top, monitor.Width, monitor.Height, 0x0040); };
-            window.SizeChanged += (_, _) => Draw(); window.PreviewKeyDown += Key; window.Closing += (_, e) => { if (!finished) { e.Cancel = true; Complete(null); } };
+            window.SizeChanged += (_, _) => Draw(); window.PreviewKeyDown += Key; window.Closing += (_, e) => { if (!finished) { e.Cancel = true; window.Dispatcher.BeginInvoke(() => Complete(null)); } }; // WPF cannot close a window from its own Closing event.
             canvas.MouseLeftButtonDown += (_, e) => Down(pane, e); canvas.MouseMove += (_, e) => Move(pane, e); canvas.MouseLeftButtonUp += (_, e) => Up(pane, e);
         }
     }

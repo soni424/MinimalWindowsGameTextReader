@@ -45,7 +45,7 @@ public sealed class AutoReadWatcher : IDisposable
     {
         Stop(); DialogueGate runGate; lock (gateLock) runGate = gate = new(); var next = new CancellationTokenSource(); session = next; var id = Interlocked.Increment(ref generation); _ = Run(area, next, id, runGate);
     }
-    public void Stop() { var previous = session; session = null; try { previous?.Cancel(); } catch (ObjectDisposedException) { } Interlocked.Increment(ref generation); }
+    public void Stop() { var previous = session; session = null; try { previous?.Cancel(); } catch (ObjectDisposedException) { } Interlocked.Increment(ref generation); if (previous != null) Status?.Invoke("Auto-Read is off.", false); }
     public bool IsCurrent(long id, long revision) => Active && generation == id && epoch == revision;
     public void ManualStarted() { Interlocked.Increment(ref epoch); lock (gateLock) gate.ResetCandidate(); }
     public void RememberManual(string text) { lock (gateLock) gate.RememberManual(text); }
