@@ -2233,11 +2233,19 @@ class SettingsUI:
 
     def _reader_tab_changed(self, _event: object | None = None) -> None:
         if self.reader_tabs.select() != str(self.reader_preview_frame):
+            self.root.after_idle(self._finish_reader_edit_switch)
             return
         self._markdown_mode = True
         if self._preview_open_after is not None:
             self.root.after_cancel(self._preview_open_after)
         self._preview_open_after = self.root.after_idle(self._open_reader_preview)
+
+    def _finish_reader_edit_switch(self) -> None:
+        if self.reader_tabs.select() != str(self.captured_text_frame):
+            return
+        self.markdown_preview.sync_layout()
+        if self.root.focus_get() is self.reader_tabs:
+            self.captured_text.focus_set()
 
     def _open_reader_preview(self) -> None:
         self._preview_open_after = None
@@ -2601,6 +2609,11 @@ class SettingsUI:
             self.details_button.configure(state="disabled")
         self.set_read_again_enabled(False)
         self.set_status("Captured text cleared.")
+        self.root.after_idle(self._focus_reader_editor_after_clear)
+
+    def _focus_reader_editor_after_clear(self) -> None:
+        if self.reader_tabs.select() == str(self.captured_text_frame):
+            self.captured_text.focus_set()
 
     def set_read_again_enabled(self, enabled: bool) -> None:
         if hasattr(self, "read_again_button"):

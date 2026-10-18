@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import tkinter as tk
+from tkinter import ttk
 
 from config import ConfigStore
 from main import GameTextReaderApplication
@@ -219,6 +220,90 @@ class MarkdownReaderUiTests(unittest.TestCase):
             self.assertEqual(self.ui.reader_tabs.select(), str(self.ui.captured_text_frame))
             self.assertEqual(self.ui.prepare_reader_document('Plain OCR text.').spoken_text,
                              'Plain OCR text.')
+
+    def test_clicking_edit_after_preview_restores_typing_focus(self):
+        self.root.deiconify()
+        self.root.update()
+        self.root.focus_force()
+        editor = self.ui.captured_text
+        editor.focus_set()
+        editor.event_generate('<KeyPress>', keysym='a')
+        self.root.update()
+        self.assertEqual(editor.get('1.0', 'end-1c'), 'a')
+
+        with patch.object(self.ui.markdown_preview, 'set_document', return_value=False):
+            self.ui.reader_tabs.event_generate('<Button-1>', x=90, y=15)
+            self.root.update()
+            self.assertEqual(self.ui.reader_tabs.select(), str(self.ui.reader_preview_frame))
+            self.ui.reader_tabs.event_generate('<Button-1>', x=40, y=15)
+            self.root.update()
+            self.assertEqual(self.ui.reader_tabs.select(), str(self.ui.captured_text_frame))
+
+        self.assertEqual(self.root.focus_get(), editor)
+        editor.event_generate('<KeyPress>', keysym='b')
+        self.root.update()
+        self.assertEqual(editor.get('1.0', 'end-1c'), 'ab')
+
+    def test_ocr_return_to_edit_does_not_steal_other_widget_focus(self):
+        self.root.deiconify()
+        self.root.geometry('1500x900+40+40')
+        self.root.update()
+        self.root.focus_force()
+        with patch.object(self.ui.markdown_preview, 'set_document', return_value=False):
+            self.ui.reader_tabs.select(self.ui.reader_preview_frame)
+            self.root.update()
+        self.root.focus_set()
+        self.root.update()
+        self.assertEqual(self.root.focus_get(), self.root)
+
+        self.ui.set_last_text('New OCR text.')
+        self.root.update()
+        self.assertEqual(self.ui.reader_tabs.select(), str(self.ui.captured_text_frame))
+        self.assertEqual(self.root.focus_get(), self.root)
+
+    def test_keyboard_return_to_edit_restores_typing_focus(self):
+        self.root.deiconify()
+        self.root.update()
+        self.root.focus_force()
+        with patch.object(self.ui.markdown_preview, 'set_document', return_value=False):
+            self.ui.reader_tabs.select(self.ui.reader_preview_frame)
+            self.root.update()
+            self.ui.reader_tabs.focus_set()
+            self.ui.reader_tabs.event_generate('<Control-Shift-Tab>')
+            self.root.update()
+
+        self.assertEqual(self.ui.reader_tabs.select(), str(self.ui.captured_text_frame))
+        self.assertEqual(self.root.focus_get(), self.ui.captured_text)
+
+    def test_clear_after_preview_focuses_edit_for_typing(self):
+        self.root.deiconify()
+        self.root.update()
+        self.root.focus_force()
+        self.ui.captured_text.insert('1.0', '# Old Markdown')
+        with (patch.object(self.ui.markdown_preview, 'set_document', return_value=False),
+              patch.object(self.ui.markdown_preview, 'sync_layout') as sync_preview):
+            self.ui.reader_tabs.select(self.ui.reader_preview_frame)
+            self.root.update()
+            sync_preview.reset_mock()
+            clear = next(
+                child for child in self.ui._reader_trailing_actions.winfo_children()
+                if isinstance(child, ttk.Button) and child.cget('text') == 'Clear'
+            )
+            clear.focus_set()
+            clear.invoke()
+            self.root.update()
+            self.assertTrue(sync_preview.called)
+
+        self.assertEqual(self.ui.reader_tabs.select(), str(self.ui.captured_text_frame))
+        self.assertEqual(self.root.focus_get(), self.ui.captured_text)
+        self.ui.captured_text.event_generate('<KeyPress>', keysym='a')
+        self.root.update()
+        self.assertEqual(self.ui.captured_text.get('1.0', 'end-1c'), 'a')
+        self.root.clipboard_clear()
+        self.root.clipboard_append(' pasted')
+        self.ui.captured_text.event_generate('<<Paste>>')
+        self.root.update()
+        self.assertEqual(self.ui.captured_text.get('1.0', 'end-1c'), 'a pasted')
 
     def test_preview_seek_uses_current_active_document_only(self):
         source = '1. **Observation:** Notice details.'
