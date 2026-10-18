@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows10.0.17763.0</TargetFramework><UseWPF>true</UseWPF><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" /><PackageReference Include="NUnit" Version="5.0.0" /><PackageReference Include="NUnit3TestAdapter" Version="6.3.1" />
+    <ProjectReference Include="../GameTextReader.App/GameTextReader.App.csproj" />
+  </ItemGroup>
+  <ItemGroup><None Include="../../test_ocr_passages.json" Link="Fixtures/ocr_passages.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><None Update="Fixtures/*" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+</Project>

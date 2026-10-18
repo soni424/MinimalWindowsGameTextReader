@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="Markdig" Version="1.4.0" /><PackageReference Include="HtmlSanitizer" Version="9.2.1039" /><PackageReference Include="SymSpell" Version="6.7.3" ExcludeAssets="contentFiles" /></ItemGroup>
+  <ItemGroup><Content Include="Assets/**/*" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+</Project>

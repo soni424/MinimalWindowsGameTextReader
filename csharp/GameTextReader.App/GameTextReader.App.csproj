@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows10.0.17763.0</TargetFramework><UseWPF>true</UseWPF>
+    <AssemblyName>GameTextReader</AssemblyName><ApplicationIcon>../../assets/app_icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest><PublishTrimmed>false</PublishTrimmed>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../GameTextReader.Core/GameTextReader.Core.csproj" /><ProjectReference Include="../GameTextReader.Windows/GameTextReader.Windows.csproj" />
+    <PackageReference Include="AvalonEdit" Version="6.3.1.120" /><PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
+    <Content Include="../../assets/**/*" Link="assets/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets/**/*" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="../../assets/app_icon.ico" Link="assets/app_icon.ico" /><Resource Include="../../assets/icons/app_icon_32.png" Link="assets/icons/app_icon_32.png" />
+  </ItemGroup>
+</Project>

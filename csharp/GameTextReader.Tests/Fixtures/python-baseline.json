@@ -1,0 +1,1857 @@
+{
+  "speech": [
+    {
+      "source": "Sentinel 27's Testimony\n\nI saw it. I definitely saw it!",
+      "markdown": false,
+      "spoken": "Sentinel 27's Testimony. I saw it. I definitely saw it!",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 8,
+          "source_start": 0,
+          "source_end": 8
+        },
+        {
+          "spoken_start": 9,
+          "spoken_end": 13,
+          "source_start": 9,
+          "source_end": 13
+        },
+        {
+          "spoken_start": 14,
+          "spoken_end": 23,
+          "source_start": 14,
+          "source_end": 23
+        },
+        {
+          "spoken_start": 25,
+          "spoken_end": 26,
+          "source_start": 25,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 27,
+          "spoken_end": 30,
+          "source_start": 27,
+          "source_end": 30
+        },
+        {
+          "spoken_start": 31,
+          "spoken_end": 33,
+          "source_start": 31,
+          "source_end": 33
+        },
+        {
+          "spoken_start": 35,
+          "spoken_end": 36,
+          "source_start": 35,
+          "source_end": 36
+        },
+        {
+          "spoken_start": 37,
+          "spoken_end": 47,
+          "source_start": 37,
+          "source_end": 47
+        },
+        {
+          "spoken_start": 48,
+          "spoken_end": 51,
+          "source_start": 48,
+          "source_end": 51
+        },
+        {
+          "spoken_start": 52,
+          "spoken_end": 54,
+          "source_start": 52,
+          "source_end": 54
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 25,
+          "source_offset": 25,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "Sentinel 27's Testimony\n\nI saw it. I definitely saw it!",
+      "markdown": true,
+      "spoken": "Sentinel 27's Testimony. I saw it. I definitely saw it!",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 8,
+          "source_start": 0,
+          "source_end": 8
+        },
+        {
+          "spoken_start": 9,
+          "spoken_end": 13,
+          "source_start": 9,
+          "source_end": 13
+        },
+        {
+          "spoken_start": 14,
+          "spoken_end": 23,
+          "source_start": 14,
+          "source_end": 23
+        },
+        {
+          "spoken_start": 25,
+          "spoken_end": 26,
+          "source_start": 25,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 27,
+          "spoken_end": 30,
+          "source_start": 27,
+          "source_end": 30
+        },
+        {
+          "spoken_start": 31,
+          "spoken_end": 33,
+          "source_start": 31,
+          "source_end": 33
+        },
+        {
+          "spoken_start": 35,
+          "spoken_end": 36,
+          "source_start": 35,
+          "source_end": 36
+        },
+        {
+          "spoken_start": 37,
+          "spoken_end": 47,
+          "source_start": 37,
+          "source_end": 47
+        },
+        {
+          "spoken_start": 48,
+          "spoken_end": 51,
+          "source_start": 48,
+          "source_end": 51
+        },
+        {
+          "spoken_start": 52,
+          "spoken_end": 54,
+          "source_start": 52,
+          "source_end": 54
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 25,
+          "source_offset": 25,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "It documents:\n\u2022 First item\n\u2022 Second item",
+      "markdown": false,
+      "spoken": "It documents: First item. Second item.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 2,
+          "source_start": 0,
+          "source_end": 2
+        },
+        {
+          "spoken_start": 3,
+          "spoken_end": 12,
+          "source_start": 3,
+          "source_end": 12
+        },
+        {
+          "spoken_start": 14,
+          "spoken_end": 19,
+          "source_start": 16,
+          "source_end": 21
+        },
+        {
+          "spoken_start": 20,
+          "spoken_end": 24,
+          "source_start": 22,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 26,
+          "spoken_end": 32,
+          "source_start": 29,
+          "source_end": 35
+        },
+        {
+          "spoken_start": 33,
+          "spoken_end": 37,
+          "source_start": 36,
+          "source_end": 40
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 14,
+          "source_offset": 16,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 26,
+          "source_offset": 29,
+          "milliseconds": 180
+        }
+      ]
+    },
+    {
+      "source": "It documents:\n\u2022 First item\n\u2022 Second item",
+      "markdown": true,
+      "spoken": "It documents: \u2022 First item \u2022 Second item.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 2,
+          "source_start": 0,
+          "source_end": 2
+        },
+        {
+          "spoken_start": 3,
+          "spoken_end": 12,
+          "source_start": 3,
+          "source_end": 12
+        },
+        {
+          "spoken_start": 16,
+          "spoken_end": 21,
+          "source_start": 16,
+          "source_end": 21
+        },
+        {
+          "spoken_start": 22,
+          "spoken_end": 26,
+          "source_start": 22,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 29,
+          "spoken_end": 35,
+          "source_start": 29,
+          "source_end": 35
+        },
+        {
+          "spoken_start": 36,
+          "spoken_end": 40,
+          "source_start": 36,
+          "source_end": 40
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 16,
+          "source_offset": 16,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 29,
+          "source_offset": 29,
+          "milliseconds": 180
+        }
+      ]
+    },
+    {
+      "source": "This is an ordinary wrapped\nline of dialogue.",
+      "markdown": false,
+      "spoken": "This is an ordinary wrapped line of dialogue.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 4,
+          "source_start": 0,
+          "source_end": 4
+        },
+        {
+          "spoken_start": 5,
+          "spoken_end": 7,
+          "source_start": 5,
+          "source_end": 7
+        },
+        {
+          "spoken_start": 8,
+          "spoken_end": 10,
+          "source_start": 8,
+          "source_end": 10
+        },
+        {
+          "spoken_start": 11,
+          "spoken_end": 19,
+          "source_start": 11,
+          "source_end": 19
+        },
+        {
+          "spoken_start": 20,
+          "spoken_end": 27,
+          "source_start": 20,
+          "source_end": 27
+        },
+        {
+          "spoken_start": 28,
+          "spoken_end": 32,
+          "source_start": 28,
+          "source_end": 32
+        },
+        {
+          "spoken_start": 33,
+          "spoken_end": 35,
+          "source_start": 33,
+          "source_end": 35
+        },
+        {
+          "spoken_start": 36,
+          "spoken_end": 44,
+          "source_start": 36,
+          "source_end": 44
+        }
+      ],
+      "pauses": []
+    },
+    {
+      "source": "This is an ordinary wrapped\nline of dialogue.",
+      "markdown": true,
+      "spoken": "This is an ordinary wrapped line of dialogue.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 4,
+          "source_start": 0,
+          "source_end": 4
+        },
+        {
+          "spoken_start": 5,
+          "spoken_end": 7,
+          "source_start": 5,
+          "source_end": 7
+        },
+        {
+          "spoken_start": 8,
+          "spoken_end": 10,
+          "source_start": 8,
+          "source_end": 10
+        },
+        {
+          "spoken_start": 11,
+          "spoken_end": 19,
+          "source_start": 11,
+          "source_end": 19
+        },
+        {
+          "spoken_start": 20,
+          "spoken_end": 27,
+          "source_start": 20,
+          "source_end": 27
+        },
+        {
+          "spoken_start": 28,
+          "spoken_end": 32,
+          "source_start": 28,
+          "source_end": 32
+        },
+        {
+          "spoken_start": 33,
+          "spoken_end": 35,
+          "source_start": 33,
+          "source_end": 35
+        },
+        {
+          "spoken_start": 36,
+          "spoken_end": 44,
+          "source_start": 36,
+          "source_end": 44
+        }
+      ],
+      "pauses": []
+    },
+    {
+      "source": "1. **Observation:** Notice details.\n2. **Question:** Why?",
+      "markdown": false,
+      "spoken": "one: **Observation:** Notice details. two: **Question:** Why?",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 3,
+          "source_start": 0,
+          "source_end": 1
+        },
+        {
+          "spoken_start": 7,
+          "spoken_end": 18,
+          "source_start": 5,
+          "source_end": 16
+        },
+        {
+          "spoken_start": 22,
+          "spoken_end": 28,
+          "source_start": 20,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 29,
+          "spoken_end": 36,
+          "source_start": 27,
+          "source_end": 34
+        },
+        {
+          "spoken_start": 38,
+          "spoken_end": 41,
+          "source_start": 36,
+          "source_end": 37
+        },
+        {
+          "spoken_start": 45,
+          "spoken_end": 53,
+          "source_start": 41,
+          "source_end": 49
+        },
+        {
+          "spoken_start": 57,
+          "spoken_end": 60,
+          "source_start": 53,
+          "source_end": 56
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 22,
+          "source_offset": 20,
+          "milliseconds": 250
+        },
+        {
+          "spoken_offset": 38,
+          "source_offset": 36,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 57,
+          "source_offset": 53,
+          "milliseconds": 250
+        }
+      ]
+    },
+    {
+      "source": "1. **Observation:** Notice details.\n2. **Question:** Why?",
+      "markdown": true,
+      "spoken": "one: Observation: Notice details. two: Question: Why?",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 3,
+          "source_start": 0,
+          "source_end": 1
+        },
+        {
+          "spoken_start": 5,
+          "spoken_end": 16,
+          "source_start": 5,
+          "source_end": 16
+        },
+        {
+          "spoken_start": 18,
+          "spoken_end": 24,
+          "source_start": 20,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 25,
+          "spoken_end": 32,
+          "source_start": 27,
+          "source_end": 34
+        },
+        {
+          "spoken_start": 34,
+          "spoken_end": 37,
+          "source_start": 36,
+          "source_end": 37
+        },
+        {
+          "spoken_start": 39,
+          "spoken_end": 47,
+          "source_start": 41,
+          "source_end": 49
+        },
+        {
+          "spoken_start": 49,
+          "spoken_end": 52,
+          "source_start": 53,
+          "source_end": 56
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 18,
+          "source_offset": 20,
+          "milliseconds": 250
+        },
+        {
+          "spoken_offset": 34,
+          "source_offset": 36,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 49,
+          "source_offset": 53,
+          "milliseconds": 250
+        }
+      ]
+    },
+    {
+      "source": "### 1. How Science Works\n\nScience & <truth>.\n\n- **Empirical Evidence:** Ideas must be backed up.\n- **Falsifiability:** Test them.\n\n---\n\n### Next section\nA new paragraph.",
+      "markdown": false,
+      "spoken": "### 1. How Science Works. Science & <truth>. **Empirical Evidence:** Ideas must be backed up. **Falsifiability:** Test them. ### Next section A new paragraph.",
+      "words": [
+        {
+          "spoken_start": 4,
+          "spoken_end": 5,
+          "source_start": 4,
+          "source_end": 5
+        },
+        {
+          "spoken_start": 7,
+          "spoken_end": 10,
+          "source_start": 7,
+          "source_end": 10
+        },
+        {
+          "spoken_start": 11,
+          "spoken_end": 18,
+          "source_start": 11,
+          "source_end": 18
+        },
+        {
+          "spoken_start": 19,
+          "spoken_end": 24,
+          "source_start": 19,
+          "source_end": 24
+        },
+        {
+          "spoken_start": 26,
+          "spoken_end": 33,
+          "source_start": 26,
+          "source_end": 33
+        },
+        {
+          "spoken_start": 37,
+          "spoken_end": 42,
+          "source_start": 37,
+          "source_end": 42
+        },
+        {
+          "spoken_start": 47,
+          "spoken_end": 56,
+          "source_start": 50,
+          "source_end": 59
+        },
+        {
+          "spoken_start": 57,
+          "spoken_end": 65,
+          "source_start": 60,
+          "source_end": 68
+        },
+        {
+          "spoken_start": 69,
+          "spoken_end": 74,
+          "source_start": 72,
+          "source_end": 77
+        },
+        {
+          "spoken_start": 75,
+          "spoken_end": 79,
+          "source_start": 78,
+          "source_end": 82
+        },
+        {
+          "spoken_start": 80,
+          "spoken_end": 82,
+          "source_start": 83,
+          "source_end": 85
+        },
+        {
+          "spoken_start": 83,
+          "spoken_end": 89,
+          "source_start": 86,
+          "source_end": 92
+        },
+        {
+          "spoken_start": 90,
+          "spoken_end": 92,
+          "source_start": 93,
+          "source_end": 95
+        },
+        {
+          "spoken_start": 96,
+          "spoken_end": 110,
+          "source_start": 101,
+          "source_end": 115
+        },
+        {
+          "spoken_start": 114,
+          "spoken_end": 118,
+          "source_start": 119,
+          "source_end": 123
+        },
+        {
+          "spoken_start": 119,
+          "spoken_end": 123,
+          "source_start": 124,
+          "source_end": 128
+        },
+        {
+          "spoken_start": 129,
+          "spoken_end": 133,
+          "source_start": 140,
+          "source_end": 144
+        },
+        {
+          "spoken_start": 134,
+          "spoken_end": 141,
+          "source_start": 145,
+          "source_end": 152
+        },
+        {
+          "spoken_start": 142,
+          "spoken_end": 143,
+          "source_start": 153,
+          "source_end": 154
+        },
+        {
+          "spoken_start": 144,
+          "spoken_end": 147,
+          "source_start": 155,
+          "source_end": 158
+        },
+        {
+          "spoken_start": 148,
+          "spoken_end": 157,
+          "source_start": 159,
+          "source_end": 168
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 26,
+          "source_offset": 26,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 47,
+          "source_offset": 50,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 69,
+          "source_offset": 72,
+          "milliseconds": 250
+        },
+        {
+          "spoken_offset": 96,
+          "source_offset": 101,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 114,
+          "source_offset": 119,
+          "milliseconds": 250
+        },
+        {
+          "spoken_offset": 129,
+          "source_offset": 140,
+          "milliseconds": 700
+        },
+        {
+          "spoken_offset": 142,
+          "source_offset": 153,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "### 1. How Science Works\n\nScience & <truth>.\n\n- **Empirical Evidence:** Ideas must be backed up.\n- **Falsifiability:** Test them.\n\n---\n\n### Next section\nA new paragraph.",
+      "markdown": true,
+      "spoken": "1. How Science Works. Science &. Empirical Evidence: Ideas must be backed up. Falsifiability: Test them. Next section. A new paragraph.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 1,
+          "source_start": 4,
+          "source_end": 5
+        },
+        {
+          "spoken_start": 3,
+          "spoken_end": 6,
+          "source_start": 7,
+          "source_end": 10
+        },
+        {
+          "spoken_start": 7,
+          "spoken_end": 14,
+          "source_start": 11,
+          "source_end": 18
+        },
+        {
+          "spoken_start": 15,
+          "spoken_end": 20,
+          "source_start": 19,
+          "source_end": 24
+        },
+        {
+          "spoken_start": 22,
+          "spoken_end": 29,
+          "source_start": 26,
+          "source_end": 33
+        },
+        {
+          "spoken_start": 33,
+          "spoken_end": 42,
+          "source_start": 50,
+          "source_end": 59
+        },
+        {
+          "spoken_start": 43,
+          "spoken_end": 51,
+          "source_start": 60,
+          "source_end": 68
+        },
+        {
+          "spoken_start": 53,
+          "spoken_end": 58,
+          "source_start": 72,
+          "source_end": 77
+        },
+        {
+          "spoken_start": 59,
+          "spoken_end": 63,
+          "source_start": 78,
+          "source_end": 82
+        },
+        {
+          "spoken_start": 64,
+          "spoken_end": 66,
+          "source_start": 83,
+          "source_end": 85
+        },
+        {
+          "spoken_start": 67,
+          "spoken_end": 73,
+          "source_start": 86,
+          "source_end": 92
+        },
+        {
+          "spoken_start": 74,
+          "spoken_end": 76,
+          "source_start": 93,
+          "source_end": 95
+        },
+        {
+          "spoken_start": 78,
+          "spoken_end": 92,
+          "source_start": 101,
+          "source_end": 115
+        },
+        {
+          "spoken_start": 94,
+          "spoken_end": 98,
+          "source_start": 119,
+          "source_end": 123
+        },
+        {
+          "spoken_start": 99,
+          "spoken_end": 103,
+          "source_start": 124,
+          "source_end": 128
+        },
+        {
+          "spoken_start": 105,
+          "spoken_end": 109,
+          "source_start": 140,
+          "source_end": 144
+        },
+        {
+          "spoken_start": 110,
+          "spoken_end": 117,
+          "source_start": 145,
+          "source_end": 152
+        },
+        {
+          "spoken_start": 119,
+          "spoken_end": 120,
+          "source_start": 153,
+          "source_end": 154
+        },
+        {
+          "spoken_start": 121,
+          "spoken_end": 124,
+          "source_start": 155,
+          "source_end": 158
+        },
+        {
+          "spoken_start": 125,
+          "spoken_end": 134,
+          "source_start": 159,
+          "source_end": 168
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 22,
+          "source_offset": 26,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 33,
+          "source_offset": 50,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 53,
+          "source_offset": 72,
+          "milliseconds": 250
+        },
+        {
+          "spoken_offset": 78,
+          "source_offset": 101,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 94,
+          "source_offset": 119,
+          "milliseconds": 250
+        },
+        {
+          "spoken_offset": 105,
+          "source_offset": 140,
+          "milliseconds": 700
+        },
+        {
+          "spoken_offset": 119,
+          "source_offset": 153,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "1. repeat repeat\n2. repeat again\n\nDr. Smith read 3.14 things.\n\nUnicode caf\u00e9 \ud83d\ude00 and Yohan.",
+      "markdown": false,
+      "spoken": "one: repeat repeat. two: repeat again. Dr. Smith read 3.14 things. Unicode caf\u00e9 \ud83d\ude00 and Yohan.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 3,
+          "source_start": 0,
+          "source_end": 1
+        },
+        {
+          "spoken_start": 5,
+          "spoken_end": 11,
+          "source_start": 3,
+          "source_end": 9
+        },
+        {
+          "spoken_start": 12,
+          "spoken_end": 18,
+          "source_start": 10,
+          "source_end": 16
+        },
+        {
+          "spoken_start": 20,
+          "spoken_end": 23,
+          "source_start": 17,
+          "source_end": 18
+        },
+        {
+          "spoken_start": 25,
+          "spoken_end": 31,
+          "source_start": 20,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 32,
+          "spoken_end": 37,
+          "source_start": 27,
+          "source_end": 32
+        },
+        {
+          "spoken_start": 39,
+          "spoken_end": 41,
+          "source_start": 34,
+          "source_end": 36
+        },
+        {
+          "spoken_start": 43,
+          "spoken_end": 48,
+          "source_start": 38,
+          "source_end": 43
+        },
+        {
+          "spoken_start": 49,
+          "spoken_end": 53,
+          "source_start": 44,
+          "source_end": 48
+        },
+        {
+          "spoken_start": 54,
+          "spoken_end": 55,
+          "source_start": 49,
+          "source_end": 50
+        },
+        {
+          "spoken_start": 56,
+          "spoken_end": 58,
+          "source_start": 51,
+          "source_end": 53
+        },
+        {
+          "spoken_start": 59,
+          "spoken_end": 65,
+          "source_start": 54,
+          "source_end": 60
+        },
+        {
+          "spoken_start": 67,
+          "spoken_end": 74,
+          "source_start": 63,
+          "source_end": 70
+        },
+        {
+          "spoken_start": 75,
+          "spoken_end": 79,
+          "source_start": 71,
+          "source_end": 75
+        },
+        {
+          "spoken_start": 83,
+          "spoken_end": 86,
+          "source_start": 79,
+          "source_end": 82
+        },
+        {
+          "spoken_start": 87,
+          "spoken_end": 92,
+          "source_start": 83,
+          "source_end": 88
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 20,
+          "source_offset": 17,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 39,
+          "source_offset": 34,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 67,
+          "source_offset": 63,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "1. repeat repeat\n2. repeat again\n\nDr. Smith read 3.14 things.\n\nUnicode caf\u00e9 \ud83d\ude00 and Yohan.",
+      "markdown": true,
+      "spoken": "one: repeat repeat. two: repeat again. Dr. Smith read 3.14 things. Unicode caf\u00e9 \ud83d\ude00 and Yohan.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 3,
+          "source_start": 0,
+          "source_end": 1
+        },
+        {
+          "spoken_start": 5,
+          "spoken_end": 11,
+          "source_start": 3,
+          "source_end": 9
+        },
+        {
+          "spoken_start": 12,
+          "spoken_end": 18,
+          "source_start": 10,
+          "source_end": 16
+        },
+        {
+          "spoken_start": 20,
+          "spoken_end": 23,
+          "source_start": 17,
+          "source_end": 18
+        },
+        {
+          "spoken_start": 25,
+          "spoken_end": 31,
+          "source_start": 20,
+          "source_end": 26
+        },
+        {
+          "spoken_start": 32,
+          "spoken_end": 37,
+          "source_start": 27,
+          "source_end": 32
+        },
+        {
+          "spoken_start": 39,
+          "spoken_end": 41,
+          "source_start": 34,
+          "source_end": 36
+        },
+        {
+          "spoken_start": 43,
+          "spoken_end": 48,
+          "source_start": 38,
+          "source_end": 43
+        },
+        {
+          "spoken_start": 49,
+          "spoken_end": 53,
+          "source_start": 44,
+          "source_end": 48
+        },
+        {
+          "spoken_start": 54,
+          "spoken_end": 55,
+          "source_start": 49,
+          "source_end": 50
+        },
+        {
+          "spoken_start": 56,
+          "spoken_end": 58,
+          "source_start": 51,
+          "source_end": 53
+        },
+        {
+          "spoken_start": 59,
+          "spoken_end": 65,
+          "source_start": 54,
+          "source_end": 60
+        },
+        {
+          "spoken_start": 67,
+          "spoken_end": 74,
+          "source_start": 63,
+          "source_end": 70
+        },
+        {
+          "spoken_start": 75,
+          "spoken_end": 79,
+          "source_start": 71,
+          "source_end": 75
+        },
+        {
+          "spoken_start": 83,
+          "spoken_end": 86,
+          "source_start": 79,
+          "source_end": 82
+        },
+        {
+          "spoken_start": 87,
+          "spoken_end": 92,
+          "source_start": 83,
+          "source_end": 88
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 20,
+          "source_offset": 17,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 39,
+          "source_offset": 34,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 67,
+          "source_offset": 63,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "- parent:\n  - child one\n  - child two\n- sibling",
+      "markdown": false,
+      "spoken": "parent: child one. child two. sibling.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 6,
+          "source_start": 2,
+          "source_end": 8
+        },
+        {
+          "spoken_start": 8,
+          "spoken_end": 13,
+          "source_start": 14,
+          "source_end": 19
+        },
+        {
+          "spoken_start": 14,
+          "spoken_end": 17,
+          "source_start": 20,
+          "source_end": 23
+        },
+        {
+          "spoken_start": 19,
+          "spoken_end": 24,
+          "source_start": 28,
+          "source_end": 33
+        },
+        {
+          "spoken_start": 25,
+          "spoken_end": 28,
+          "source_start": 34,
+          "source_end": 37
+        },
+        {
+          "spoken_start": 30,
+          "spoken_end": 37,
+          "source_start": 40,
+          "source_end": 47
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 8,
+          "source_offset": 14,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 19,
+          "source_offset": 28,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 30,
+          "source_offset": 40,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "- parent:\n  - child one\n  - child two\n- sibling",
+      "markdown": true,
+      "spoken": "parent: child one. child two. sibling.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 6,
+          "source_start": 2,
+          "source_end": 8
+        },
+        {
+          "spoken_start": 8,
+          "spoken_end": 13,
+          "source_start": 14,
+          "source_end": 19
+        },
+        {
+          "spoken_start": 14,
+          "spoken_end": 17,
+          "source_start": 20,
+          "source_end": 23
+        },
+        {
+          "spoken_start": 19,
+          "spoken_end": 24,
+          "source_start": 28,
+          "source_end": 33
+        },
+        {
+          "spoken_start": 25,
+          "spoken_end": 28,
+          "source_start": 34,
+          "source_end": 37
+        },
+        {
+          "spoken_start": 30,
+          "spoken_end": 37,
+          "source_start": 40,
+          "source_end": 47
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 8,
+          "source_offset": 14,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 19,
+          "source_offset": 28,
+          "milliseconds": 180
+        },
+        {
+          "spoken_offset": 30,
+          "source_offset": 40,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "# Title\n\nA [link](https://example.com) and `code` with $x+1$.\n\n```python\nprint('no')\n```\n\n![A diagram](https://example.com/image.png)",
+      "markdown": false,
+      "spoken": "# Title. A [link](https://example.com) and `code` with $x+1$. ```python print('no') ```. ![A diagram](https://example.com/image.png).",
+      "words": [
+        {
+          "spoken_start": 2,
+          "spoken_end": 7,
+          "source_start": 2,
+          "source_end": 7
+        },
+        {
+          "spoken_start": 9,
+          "spoken_end": 10,
+          "source_start": 9,
+          "source_end": 10
+        },
+        {
+          "spoken_start": 12,
+          "spoken_end": 16,
+          "source_start": 12,
+          "source_end": 16
+        },
+        {
+          "spoken_start": 18,
+          "spoken_end": 23,
+          "source_start": 18,
+          "source_end": 23
+        },
+        {
+          "spoken_start": 26,
+          "spoken_end": 33,
+          "source_start": 26,
+          "source_end": 33
+        },
+        {
+          "spoken_start": 34,
+          "spoken_end": 37,
+          "source_start": 34,
+          "source_end": 37
+        },
+        {
+          "spoken_start": 39,
+          "spoken_end": 42,
+          "source_start": 39,
+          "source_end": 42
+        },
+        {
+          "spoken_start": 44,
+          "spoken_end": 48,
+          "source_start": 44,
+          "source_end": 48
+        },
+        {
+          "spoken_start": 50,
+          "spoken_end": 54,
+          "source_start": 50,
+          "source_end": 54
+        },
+        {
+          "spoken_start": 56,
+          "spoken_end": 57,
+          "source_start": 56,
+          "source_end": 57
+        },
+        {
+          "spoken_start": 58,
+          "spoken_end": 59,
+          "source_start": 58,
+          "source_end": 59
+        },
+        {
+          "spoken_start": 65,
+          "spoken_end": 71,
+          "source_start": 66,
+          "source_end": 72
+        },
+        {
+          "spoken_start": 72,
+          "spoken_end": 77,
+          "source_start": 73,
+          "source_end": 78
+        },
+        {
+          "spoken_start": 79,
+          "spoken_end": 81,
+          "source_start": 80,
+          "source_end": 82
+        },
+        {
+          "spoken_start": 91,
+          "spoken_end": 92,
+          "source_start": 92,
+          "source_end": 93
+        },
+        {
+          "spoken_start": 93,
+          "spoken_end": 100,
+          "source_start": 94,
+          "source_end": 101
+        },
+        {
+          "spoken_start": 102,
+          "spoken_end": 107,
+          "source_start": 103,
+          "source_end": 108
+        },
+        {
+          "spoken_start": 110,
+          "spoken_end": 117,
+          "source_start": 111,
+          "source_end": 118
+        },
+        {
+          "spoken_start": 118,
+          "spoken_end": 121,
+          "source_start": 119,
+          "source_end": 122
+        },
+        {
+          "spoken_start": 122,
+          "spoken_end": 127,
+          "source_start": 123,
+          "source_end": 128
+        },
+        {
+          "spoken_start": 128,
+          "spoken_end": 131,
+          "source_start": 129,
+          "source_end": 132
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 9,
+          "source_offset": 9,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 65,
+          "source_offset": 66,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 91,
+          "source_offset": 92,
+          "milliseconds": 350
+        }
+      ]
+    },
+    {
+      "source": "# Title\n\nA [link](https://example.com) and `code` with $x+1$.\n\n```python\nprint('no')\n```\n\n![A diagram](https://example.com/image.png)",
+      "markdown": true,
+      "spoken": "Title. A link and with. A diagram.",
+      "words": [
+        {
+          "spoken_start": 0,
+          "spoken_end": 5,
+          "source_start": 2,
+          "source_end": 7
+        },
+        {
+          "spoken_start": 7,
+          "spoken_end": 8,
+          "source_start": 9,
+          "source_end": 10
+        },
+        {
+          "spoken_start": 9,
+          "spoken_end": 13,
+          "source_start": 12,
+          "source_end": 16
+        },
+        {
+          "spoken_start": 14,
+          "spoken_end": 17,
+          "source_start": 39,
+          "source_end": 42
+        },
+        {
+          "spoken_start": 18,
+          "spoken_end": 22,
+          "source_start": 50,
+          "source_end": 54
+        },
+        {
+          "spoken_start": 24,
+          "spoken_end": 25,
+          "source_start": 92,
+          "source_end": 93
+        },
+        {
+          "spoken_start": 26,
+          "spoken_end": 33,
+          "source_start": 94,
+          "source_end": 101
+        }
+      ],
+      "pauses": [
+        {
+          "spoken_offset": 7,
+          "source_offset": 9,
+          "milliseconds": 350
+        },
+        {
+          "spoken_offset": 24,
+          "source_offset": 92,
+          "milliseconds": 350
+        }
+      ]
+    }
+  ],
+  "corrections": [
+    {
+      "raw": "I don't hove any more regrets.",
+      "strength": "conservative",
+      "corrected": "I don't have any more regrets.",
+      "suggestions": []
+    },
+    {
+      "raw": "Let's go bock to the Matrix, okay?\n\nFine, do what you want!\nI'll go bock by myself!",
+      "strength": "conservative",
+      "corrected": "Let's go back to the Matrix, okay?\n\nFine, do what you want!\nI'll go back by myself!",
+      "suggestions": []
+    },
+    {
+      "raw": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI foiled, but...you can succeed.\nPromise me you'll live and moke it to Xion...\nThank you...Mory.",
+      "strength": "conservative",
+      "corrected": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI failed, but...you can succeed.\nPromise me you'll live and make it to Xion...\nThank you...Mary.",
+      "suggestions": []
+    },
+    {
+      "raw": "Yohan... Why aren't you here?\nYou promised to be bock before sunrise.\nI'm so scored, Yohan.\nDon't leave me alone, please.",
+      "strength": "conservative",
+      "corrected": "Yohan... Why aren't you here?\nYou promised to be back before sunrise.\nI'm so scared, Yohan.\nDon't leave me alone, please.",
+      "suggestions": []
+    },
+    {
+      "raw": "Take o hard, long look.\nThis land hos no hope.\nAll that's left is pain and death.\nEarth's finished...",
+      "strength": "conservative",
+      "corrected": "Take a hard, long look.\nThis land has no hope.\nAll that's left is pain and death.\nEarth's finished...",
+      "suggestions": []
+    },
+    {
+      "raw": "A pond in o cove...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling\nscraps or roaring of Noytibos. I've been looking for o place like that all my\nlife.\n\nVines, gropes, and o clear pond. I wish to see t\nt ace as I draw my last\nbreath. I want to forget about the painful realit",
+      "strength": "conservative",
+      "corrected": "A pond in a cove...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling\nscraps or roaring of Noytibos. I've been looking for a place like that all my\nlife.\n\nVines, grapes, and a clear pond. I wish to see t\nt ace as I draw my last\nbreath. I want to forget about the painful reality",
+      "suggestions": [
+        {
+          "original": "cove",
+          "alternatives": [
+            "cave"
+          ]
+        },
+        {
+          "original": "t\nt ace",
+          "alternatives": [
+            "that place"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "Don't blame yourself.\nYou don't become o Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, ond much more...\nThere's o lot o Scavenger needs to know to survive out there.\n\nWatch and learn!",
+      "strength": "conservative",
+      "corrected": "Don't blame yourself.\nYou don't become a Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, and much more...\nThere's a lot a Scavenger needs to know to survive out there.\n\nWatch and learn!",
+      "suggestions": []
+    },
+    {
+      "raw": "You're not o coward...\nDon't talk about yourself like that.\nIf you soy that one more time...\n\nI'll kick your oss.",
+      "strength": "conservative",
+      "corrected": "You're not a coward...\nDon't talk about yourself like that.\nIf you say that one more time...\n\nI'll kick your ass.",
+      "suggestions": []
+    },
+    {
+      "raw": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nl...wont to go to space, too...",
+      "strength": "conservative",
+      "corrected": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nI...want to go to space, too...",
+      "suggestions": []
+    },
+    {
+      "raw": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou hove to survive! That's on order!",
+      "strength": "conservative",
+      "corrected": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou have to survive! That's an order!",
+      "suggestions": []
+    },
+    {
+      "raw": "Before I met you, l...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion...",
+      "strength": "conservative",
+      "corrected": "Before I met you, I...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion...",
+      "suggestions": []
+    },
+    {
+      "raw": "I'll hove to comp out here tonight.\nHopefully I'll find some intact circuits or valuable machine ports tomorrow...\nIf I find on Angel corpse, though, that'd be like\nIng the lottery... Heheh.",
+      "strength": "conservative",
+      "corrected": "I'll have to camp out here tonight.\nHopefully I'll find some intact circuits or valuable machine ports tomorrow...\nIf I find an Angel corpse, though, that'd be like\nIng the lottery... Heheh.",
+      "suggestions": [
+        {
+          "original": "ports",
+          "alternatives": [
+            "parts"
+          ]
+        },
+        {
+          "original": "Ing",
+          "alternatives": [
+            "winning"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "The warrlor waited overthere.",
+      "strength": "conservative",
+      "corrected": "The warrlor waited overthere.",
+      "suggestions": []
+    },
+    {
+      "raw": "The R0bot,waited!Then it moved  again.",
+      "strength": "conservative",
+      "corrected": "The R0bot,waited!Then it moved  again.",
+      "suggestions": []
+    },
+    {
+      "raw": "A glass of bock beer. I foiled their plan. She scored 42. Xion and Yohan met NaYtIbA-42. Mory arrived at the cove by the machine ports.",
+      "strength": "conservative",
+      "corrected": "A glass of bock beer. I foiled their plan. She scored 42. Xion and Yohan met NaYtIbA-42. Mory arrived at the cove by the machine ports.",
+      "suggestions": [
+        {
+          "original": "cove",
+          "alternatives": [
+            "cover"
+          ]
+        },
+        {
+          "original": "ports",
+          "alternatives": [
+            "parts"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "I sow it. There was o group. In o second, she dealt with oll of them. Mother Sphere sent on Angel for us.",
+      "strength": "conservative",
+      "corrected": "I saw it. There was a group. In a second, she dealt with all of them. Mother Sphere sent an Angel for us.",
+      "suggestions": []
+    },
+    {
+      "raw": "The warri\nor waited over there.",
+      "strength": "conservative",
+      "corrected": "The warri\nor waited over there.",
+      "suggestions": [
+        {
+          "original": "warri\nor",
+          "alternatives": [
+            "warrior"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "I don't hove any more regrets.",
+      "strength": "balanced",
+      "corrected": "I don't have any more regrets.",
+      "suggestions": []
+    },
+    {
+      "raw": "Let's go bock to the Matrix, okay?\n\nFine, do what you want!\nI'll go bock by myself!",
+      "strength": "balanced",
+      "corrected": "Let's go back to the Matrix, okay?\n\nFine, do what you want!\nI'll go back by myself!",
+      "suggestions": []
+    },
+    {
+      "raw": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI foiled, but...you can succeed.\nPromise me you'll live and moke it to Xion...\nThank you...Mory.",
+      "strength": "balanced",
+      "corrected": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI failed, but...you can succeed.\nPromise me you'll live and make it to Xion...\nThank you...Mary.",
+      "suggestions": []
+    },
+    {
+      "raw": "Yohan... Why aren't you here?\nYou promised to be bock before sunrise.\nI'm so scored, Yohan.\nDon't leave me alone, please.",
+      "strength": "balanced",
+      "corrected": "Yohan... Why aren't you here?\nYou promised to be back before sunrise.\nI'm so scared, Yohan.\nDon't leave me alone, please.",
+      "suggestions": []
+    },
+    {
+      "raw": "Take o hard, long look.\nThis land hos no hope.\nAll that's left is pain and death.\nEarth's finished...",
+      "strength": "balanced",
+      "corrected": "Take a hard, long look.\nThis land has no hope.\nAll that's left is pain and death.\nEarth's finished...",
+      "suggestions": []
+    },
+    {
+      "raw": "A pond in o cove...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling\nscraps or roaring of Noytibos. I've been looking for o place like that all my\nlife.\n\nVines, gropes, and o clear pond. I wish to see t\nt ace as I draw my last\nbreath. I want to forget about the painful realit",
+      "strength": "balanced",
+      "corrected": "A pond in a cove...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling\nscraps or roaring of Noytibos. I've been looking for a place like that all my\nlife.\n\nVines, grapes, and a clear pond. I wish to see t\nt ace as I draw my last\nbreath. I want to forget about the painful reality",
+      "suggestions": [
+        {
+          "original": "cove",
+          "alternatives": [
+            "cave"
+          ]
+        },
+        {
+          "original": "t\nt ace",
+          "alternatives": [
+            "that place"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "Don't blame yourself.\nYou don't become o Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, ond much more...\nThere's o lot o Scavenger needs to know to survive out there.\n\nWatch and learn!",
+      "strength": "balanced",
+      "corrected": "Don't blame yourself.\nYou don't become a Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, and much more...\nThere's a lot a Scavenger needs to know to survive out there.\n\nWatch and learn!",
+      "suggestions": []
+    },
+    {
+      "raw": "You're not o coward...\nDon't talk about yourself like that.\nIf you soy that one more time...\n\nI'll kick your oss.",
+      "strength": "balanced",
+      "corrected": "You're not a coward...\nDon't talk about yourself like that.\nIf you say that one more time...\n\nI'll kick your ass.",
+      "suggestions": []
+    },
+    {
+      "raw": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nl...wont to go to space, too...",
+      "strength": "balanced",
+      "corrected": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nI...want to go to space, too...",
+      "suggestions": []
+    },
+    {
+      "raw": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou hove to survive! That's on order!",
+      "strength": "balanced",
+      "corrected": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou have to survive! That's an order!",
+      "suggestions": []
+    },
+    {
+      "raw": "Before I met you, l...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion...",
+      "strength": "balanced",
+      "corrected": "Before I met you, I...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion...",
+      "suggestions": []
+    },
+    {
+      "raw": "I'll hove to comp out here tonight.\nHopefully I'll find some intact circuits or valuable machine ports tomorrow...\nIf I find on Angel corpse, though, that'd be like\nIng the lottery... Heheh.",
+      "strength": "balanced",
+      "corrected": "I'll have to camp out here tonight.\nHopefully I'll find some intact circuits or valuable machine ports tomorrow...\nIf I find an Angel corpse, though, that'd be like\nIng the lottery... Heheh.",
+      "suggestions": [
+        {
+          "original": "ports",
+          "alternatives": [
+            "parts"
+          ]
+        },
+        {
+          "original": "Ing",
+          "alternatives": [
+            "winning"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "The warrlor waited overthere.",
+      "strength": "balanced",
+      "corrected": "The warrior waited over there.",
+      "suggestions": []
+    },
+    {
+      "raw": "The R0bot,waited!Then it moved  again.",
+      "strength": "balanced",
+      "corrected": "The Robot, waited! Then it moved again.",
+      "suggestions": []
+    },
+    {
+      "raw": "A glass of bock beer. I foiled their plan. She scored 42. Xion and Yohan met NaYtIbA-42. Mory arrived at the cove by the machine ports.",
+      "strength": "balanced",
+      "corrected": "A glass of bock beer. I foiled their plan. She scored 42. Xion and Yohan met NaYtIbA-42. Mory arrived at the cove by the machine ports.",
+      "suggestions": [
+        {
+          "original": "cove",
+          "alternatives": [
+            "cover"
+          ]
+        },
+        {
+          "original": "ports",
+          "alternatives": [
+            "parts"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "I sow it. There was o group. In o second, she dealt with oll of them. Mother Sphere sent on Angel for us.",
+      "strength": "balanced",
+      "corrected": "I saw it. There was a group. In a second, she dealt with all of them. Mother Sphere sent an Angel for us.",
+      "suggestions": []
+    },
+    {
+      "raw": "The warri\nor waited over there.",
+      "strength": "balanced",
+      "corrected": "The warri\nor waited over there.",
+      "suggestions": [
+        {
+          "original": "warri\nor",
+          "alternatives": [
+            "warrior"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "I don't hove any more regrets.",
+      "strength": "strong",
+      "corrected": "I don't have any more regrets.",
+      "suggestions": []
+    },
+    {
+      "raw": "Let's go bock to the Matrix, okay?\n\nFine, do what you want!\nI'll go bock by myself!",
+      "strength": "strong",
+      "corrected": "Let's go back to the Matrix, okay?\n\nFine, do what you want!\nI'll go back by myself!",
+      "suggestions": []
+    },
+    {
+      "raw": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI foiled, but...you can succeed.\nPromise me you'll live and moke it to Xion...\nThank you...Mory.",
+      "strength": "strong",
+      "corrected": "Mary, do you know why you're special?\nBecause you don't give up.\n\nI failed, but...you can succeed.\nPromise me you'll live and make it to Xion...\nThank you...Mary.",
+      "suggestions": []
+    },
+    {
+      "raw": "Yohan... Why aren't you here?\nYou promised to be bock before sunrise.\nI'm so scored, Yohan.\nDon't leave me alone, please.",
+      "strength": "strong",
+      "corrected": "Yohan... Why aren't you here?\nYou promised to be back before sunrise.\nI'm so scared, Yohan.\nDon't leave me alone, please.",
+      "suggestions": []
+    },
+    {
+      "raw": "Take o hard, long look.\nThis land hos no hope.\nAll that's left is pain and death.\nEarth's finished...",
+      "strength": "strong",
+      "corrected": "Take a hard, long look.\nThis land has no hope.\nAll that's left is pain and death.\nEarth's finished...",
+      "suggestions": []
+    },
+    {
+      "raw": "A pond in o cove...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling\nscraps or roaring of Noytibos. I've been looking for o place like that all my\nlife.\n\nVines, gropes, and o clear pond. I wish to see t\nt ace as I draw my last\nbreath. I want to forget about the painful realit",
+      "strength": "strong",
+      "corrected": "A pond in a cove...\n\nThe Wasteland's haven, where I'm free from the clunking noise of rattling\nscraps or roaring of Noytibos. I've been looking for a place like that all my\nlife.\n\nVines, grapes, and a clear pond. I wish to see t\nt ace as I draw my last\nbreath. I want to forget about the painful reality",
+      "suggestions": [
+        {
+          "original": "cove",
+          "alternatives": [
+            "cave"
+          ]
+        },
+        {
+          "original": "t\nt ace",
+          "alternatives": [
+            "that place"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "Don't blame yourself.\nYou don't become o Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, ond much more...\nThere's o lot o Scavenger needs to know to survive out there.\n\nWatch and learn!",
+      "strength": "strong",
+      "corrected": "Don't blame yourself.\nYou don't become a Scavenger overnight.\nStamina, infiltration, survival, ecology, terrain, tactics, and much more...\nThere's a lot a Scavenger needs to know to survive out there.\n\nWatch and learn!",
+      "suggestions": []
+    },
+    {
+      "raw": "You're not o coward...\nDon't talk about yourself like that.\nIf you soy that one more time...\n\nI'll kick your oss.",
+      "strength": "strong",
+      "corrected": "You're not a coward...\nDon't talk about yourself like that.\nIf you say that one more time...\n\nI'll kick your ass.",
+      "suggestions": []
+    },
+    {
+      "raw": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nl...wont to go to space, too...",
+      "strength": "strong",
+      "corrected": "It's been 42 days since the journey to the orbit elevator began...\nIt seems to be right in front of our eyes, but we can't reach it.\nI...want to go to space, too...",
+      "suggestions": []
+    },
+    {
+      "raw": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou hove to survive! That's on order!",
+      "strength": "strong",
+      "corrected": "It's impossible to complete the mission.\nGather the remaining people and tell them to retreat.\nYou have to survive! That's an order!",
+      "suggestions": []
+    },
+    {
+      "raw": "Before I met you, l...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion...",
+      "strength": "strong",
+      "corrected": "Before I met you, I...\nI was nothing.\nWhen I was living in the sewers...\nyou saved me.\nI'm glad I was able to repay that debt.\nPlease arrive safely in Xion...",
+      "suggestions": []
+    },
+    {
+      "raw": "I'll hove to comp out here tonight.\nHopefully I'll find some intact circuits or valuable machine ports tomorrow...\nIf I find on Angel corpse, though, that'd be like\nIng the lottery... Heheh.",
+      "strength": "strong",
+      "corrected": "I'll have to camp out here tonight.\nHopefully I'll find some intact circuits or valuable machine ports tomorrow...\nIf I find an Angel corpse, though, that'd be like\nIng the lottery... Heheh.",
+      "suggestions": [
+        {
+          "original": "ports",
+          "alternatives": [
+            "parts"
+          ]
+        },
+        {
+          "original": "Ing",
+          "alternatives": [
+            "winning"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "The warrlor waited overthere.",
+      "strength": "strong",
+      "corrected": "The warrior waited over there.",
+      "suggestions": []
+    },
+    {
+      "raw": "The R0bot,waited!Then it moved  again.",
+      "strength": "strong",
+      "corrected": "The Robot, waited! Then it moved again.",
+      "suggestions": []
+    },
+    {
+      "raw": "A glass of bock beer. I foiled their plan. She scored 42. Xion and Yohan met NaYtIbA-42. Mory arrived at the cove by the machine ports.",
+      "strength": "strong",
+      "corrected": "A glass of bock beer. I foiled their plan. She scored 42. Xion and Yohan met NaYtIbA-42. Mory arrived at the cove by the machine ports.",
+      "suggestions": [
+        {
+          "original": "cove",
+          "alternatives": [
+            "cover"
+          ]
+        },
+        {
+          "original": "ports",
+          "alternatives": [
+            "parts"
+          ]
+        }
+      ]
+    },
+    {
+      "raw": "I sow it. There was o group. In o second, she dealt with oll of them. Mother Sphere sent on Angel for us.",
+      "strength": "strong",
+      "corrected": "I saw it. There was a group. In a second, she dealt with all of them. Mother Sphere sent an Angel for us.",
+      "suggestions": []
+    },
+    {
+      "raw": "The warri\nor waited over there.",
+      "strength": "strong",
+      "corrected": "The warri\nor waited over there.",
+      "suggestions": [
+        {
+          "original": "warri\nor",
+          "alternatives": [
+            "warrior"
+          ]
+        }
+      ]
+    }
+  ]
+}

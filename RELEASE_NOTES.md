@@ -1,4 +1,25 @@
-# Game Text Reader 1.2.9-dev
+# Game Text Reader 2.0.0-dev — C# development port
+
+## Speech stability and interface refresh
+
+- Replaced the managed SAPI progress dispatcher after reproducing its negative-word-length process crash with the supplied science document. Native boundaries are now validated before mapping; cancellation and unsupported timing remain request-specific.
+- Corrected highlighting through synthesis markup, leading decorative emoji, pause boundaries and Edit/Preview changes. Coalesced progress and cached icons avoid obsolete UI work; rapid pastes prepare only the latest document.
+- Decorative supplementary emoji remain visible and copyable but are not narrated, avoiding native engine offset corruption. Ordinary Unicode prose and source text are preserved.
+- Added a single sun/moon appearance button, correctly initialized native dark title bars, readable dropdown states and friendly voice names. Existing System preferences resolve once to Dark or Light.
+- Removed the action strip that shifted tabs. Voice/shortcuts now use the available width, with uniform shortcut rows, utilities below, and narrow-window stacking. Read Again uses a clearer replay arrow.
+- Retained continuous long-form audio, pause/resume, speed, seeking, Auto-Read, OCR, compatible settings and the Python rollback build. The version remains `2.0.0-dev` with a fresh frozen build identifier; see the included validation notes.
+
+## Initial port and continuation fixes
+
+- Added a separate .NET 10/WPF application and self-contained x64 portable packaging; no Python runtime is required by this release.
+- Recreated the split Reader with an offset-aware editable source, native hosted Markdown Preview, playback controls, word/row highlights and source-aware seeking. Clear returns focus only after Edit has completed layout.
+- Ported capture/profile mapping, Standard/Enhanced Windows OCR, offline corrections and review, three Auto-Read timing policies, native shortcut registration, tray and current-user startup integration.
+- Retained compatible AppData settings with atomic saves and a backup before the first C# write. Development tests use isolated settings and do not change the user's startup registration.
+- Added Python reference fixtures, native muted speech/OCR tests and WPF/WebView2/shortcut integration verification. Keep the Python build for rollback until game-specific and older-Windows checks are complete.
+- Reject Auto-Read results that finish after focus leaves the watched game, without suppressing that dialogue when the game resumes.
+- Detect failed Preview navigation and incomplete local assets. Add failure-path checks for missing WebView2, Clear/paste/playback without Preview, and visible-window recovery when tray startup fails.
+
+## Previous Python development builds
 
 Development build for testing before a stable release.
 

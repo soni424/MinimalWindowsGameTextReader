@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="GameTextReader.Core/GameTextReader.Core.csproj" />
+  <Project Path="GameTextReader.Windows/GameTextReader.Windows.csproj" />
+  <Project Path="GameTextReader.App/GameTextReader.App.csproj" />
+  <Project Path="GameTextReader.Tests/GameTextReader.Tests.csproj" />
+</Solution>

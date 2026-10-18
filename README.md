@@ -4,6 +4,8 @@ A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and oth
 
 [Download the latest Windows release](https://github.com/soni424/MinimalWindowsGameTextReader/releases/latest)
 
+The separate **C# 2.0.0-dev** portable build is documented in [csharp/README.md](csharp/README.md). Its latest stability refresh fixes a reproduced SAPI paste/Play crash, improves source-mapped highlighting, and adds a sun/moon theme button with a matching native title bar and responsive Voice/shortcuts layout. Keep the Python build as the rollback option until the remaining game/hardware checks pass. The Python source and its System/Dark/Light selector are unchanged.
+
 ## Highlights
 
 - Reads a reusable fixed screen region or a one-time snippet selection.
@@ -42,6 +44,12 @@ python main.py
 The first run opens settings and creates a tray icon. Closing the settings window minimizes it normally. Choose **Hide settings to tray** from the tray menu only when you explicitly want to remove it from the taskbar; use **Quit** to exit fully.
 
 ## What's new
+
+### C# development port: 2.0.0-dev
+
+The new full C#/.NET 10 WPF application is built separately in [`csharp`](csharp/README.md). It modernizes the split Reader workspace while retaining native Windows OCR, Windows/SAPI voices, Markdown, source-aware playback controls, Auto-Read, correction review, profiles, shortcuts, tray, and update-safe settings. Its portable ZIP includes .NET and requires no Python. WebView2 Runtime is still required for Preview.
+
+The C# build uses the same AppData configuration and keeps a backup before its first write. Close older copies before launching it. The Python release remains available for rollback while the `2.0.0-dev` package is tested on additional games and Windows installations. See the C# README for build commands, architecture, and limitations.
 
 ### Development build: 1.2.10-dev
 

@@ -8,3 +8,7 @@ build/
 build-update/
 dist/
 dist-update/
+csharp/**/bin/
+csharp/**/obj/
+csharp/artifacts/
+csharp/TestResults/
