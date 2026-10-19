@@ -1,13 +1,6 @@
-__pycache__/
-*.pyc
 work/
 config.json
 ocr_debug.log*
-.venv/
-build/
-build-update/
-dist/
-dist-update/
 csharp/**/bin/
 csharp/**/obj/
 csharp/artifacts/

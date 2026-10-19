@@ -1,5 +1,13 @@
 # Game Text Reader 2.0.0-dev — C# development port
 
+## Capture and Auto-Read fixes
+
+- Read fixed box now minimizes the app first when its window covers the capture area, so the app no longer reads its own interface.
+- The Auto-Read button returns to Start Auto-Read whenever Auto-Read stops, including after Stop audio, profile changes and capture-area edits.
+- Canceling a snippet started from the app restores its window. Closing the selection overlay with Alt+F4 now cancels instead of blocking later snippets.
+- The Volume slider moves in whole steps.
+- The repository now contains only the C# application; the Python source remains in the Git history.
+
 ## Speech stability and interface refresh
 
 - Replaced the managed SAPI progress dispatcher after reproducing its negative-word-length process crash with the supplied science document. Native boundaries are now validated before mapping; cancellation and unsupported timing remain request-specific.

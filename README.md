@@ -1,248 +1,50 @@
 # Minimal Windows Game Text Reader
 
-A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and other on-screen text. It uses the native Windows Media OCR API through `winocr`, then reads recognised text through Windows speech voices.
+A lightweight Windows 10/11 desktop reader for game subtitles, dialogue, and other on-screen text. It recognises screen text with the built-in Windows OCR engine and reads it aloud with installed Windows speech voices.
+
+The application is a .NET 10/WPF program in [`csharp`](csharp/README.md). The portable release includes its own .NET runtime; no Python or separate .NET installation is required.
 
 [Download the latest Windows release](https://github.com/soni424/MinimalWindowsGameTextReader/releases/latest)
-
-The separate **C# 2.0.0-dev** portable build is documented in [csharp/README.md](csharp/README.md). Its latest stability refresh fixes a reproduced SAPI paste/Play crash, improves source-mapped highlighting, and adds a sun/moon theme button with a matching native title bar and responsive Voice/shortcuts layout. Keep the Python build as the rollback option until the remaining game/hardware checks pass. The Python source and its System/Dark/Light selector are unchanged.
 
 ## Highlights
 
 - Reads a reusable fixed screen region or a one-time snippet selection.
-- Optionally watches the fixed box and reads stable new dialogue automatically while its game is foreground.
-- Reads text you type or paste into the editable result box.
-- Follows speech with a highlighted visible row and current word.
-- Uses offline Windows OCR and installed Windows speech voices.
+- Optionally watches the fixed box and reads stable new dialogue automatically while its game is in the foreground (Normal, Fast or Instant).
+- Reads text you type or paste, including Markdown with a styled Preview.
+- Highlights the spoken word and row, with play/pause, sentence steps, word seeking and a 0.5×–2.0× Reader speed.
 - Switches between Standard OCR and adaptive Enhanced OCR for difficult screen text.
-- Conservatively corrects common game-font OCR mistakes while protecting fictional terminology.
-- Supports custom replacements, pronunciation previews, and protected game-specific words.
-- Provides configurable system-wide keyboard shortcuts.
-- Can start quietly in the system tray when you sign in to Windows.
-- Supports rapid dialogue reading with replace, queue, or optional overlapping voices.
-- Stores multiple capture profiles and remaps their regions after display changes.
-- Includes System, Dark, and Light appearances throughout the main interface, dialogs, drop-down controls, and scrollbars.
-- Runs quietly from the Windows system tray.
+- Conservatively corrects common game-font OCR mistakes, with custom replacements, protected game terms and a review list.
+- Configurable global shortcuts, tray icon, optional start at sign-in, multiple capture profiles and Dark/Light appearance.
 
-## Install the Windows release
+## Install
 
-1. Open the [Releases page](https://github.com/soni424/MinimalWindowsGameTextReader/releases).
-2. Download the Windows ZIP attached to the latest release.
-3. Extract the complete ZIP. Do not run the executable from inside the archive.
-4. Open the extracted `GameTextReader` folder and run `GameTextReader.exe`.
+1. Download the Windows ZIP from the [Releases page](https://github.com/soni424/MinimalWindowsGameTextReader/releases).
+2. Extract the complete ZIP to a short path, such as `C:\Games\GameTextReader`. Do not run it from inside the archive.
+3. Run `GameTextReader.exe`.
 
-Python is not required when using the packaged Windows release. Windows may display a SmartScreen warning because the application is not digitally signed.
+Windows may show a SmartScreen prompt because the application is not digitally signed. Markdown Preview needs the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/); Edit and speech work without it.
 
-## Run from source
+Close any older copy of the reader before opening another, because they share shortcuts and settings.
 
-Use Python 3.10 or newer on Windows:
+## Build from source
+
+Install the .NET 10 SDK, then from the `csharp` folder:
 
 ```powershell
-python -m pip install -r requirements.txt
-python main.py
+./build.ps1
 ```
 
-The first run opens settings and creates a tray icon. Closing the settings window minimizes it normally. Choose **Hide settings to tray** from the tray menu only when you explicitly want to remove it from the taskbar; use **Quit** to exit fully.
+The script restores locked dependencies, runs the tests, and creates a portable folder and ZIP under `csharp/artifacts`. See [csharp/README.md](csharp/README.md) for development commands, architecture and known constraints.
 
-## What's new
+## Repository layout
 
-### C# development port: 2.0.0-dev
+- `csharp/` — application source, tests and build script.
+- `assets/` — application icon, action icons and Markdown Preview (KaTeX) files used by the build.
+- `test_ocr_passages.json` — OCR passages used by the correction tests.
+- `RELEASE_NOTES.md` — changes in each build; copied into the release ZIP.
 
-The new full C#/.NET 10 WPF application is built separately in [`csharp`](csharp/README.md). It modernizes the split Reader workspace while retaining native Windows OCR, Windows/SAPI voices, Markdown, source-aware playback controls, Auto-Read, correction review, profiles, shortcuts, tray, and update-safe settings. Its portable ZIP includes .NET and requires no Python. WebView2 Runtime is still required for Preview.
+## Settings
 
-The C# build uses the same AppData configuration and keeps a backup before its first write. Close older copies before launching it. The Python release remains available for rollback while the `2.0.0-dev` package is tested on additional games and Windows installations. See the C# README for build commands, architecture, and limitations.
+Settings are stored in `%LOCALAPPDATA%\GameTextReader\config.json`, outside the application folder, so replacing or deleting a build keeps them. The first C# save keeps a `config.before-csharp.json` backup.
 
-### Development build: 1.2.10-dev
-
-- Long Reader passages using a SAPI voice now play as one continuous stream, avoiding the player handoffs that could make narration stutter or change pace. A first read may spend longer preparing the whole passage; the app remains responsive and shows its preparing status until playback begins.
-- Repeating the same passage can reuse a bounded in-memory audio buffer when its text, selected voice, base rate, volume, and pause structure have not changed. The buffer is temporary and is never saved with settings.
-- The Reader speed multiplier is applied before audio becomes audible. If Windows cannot accept that speed at startup, playback stays muted briefly while it retries, then uses the last working speed and reports the fallback.
-- Bullet labels such as **Empirical Evidence:** now have a short pause before their explanation in Markdown, plain text, and OCR captures. Times, URLs, and colons outside list labels are unchanged; displayed and copied text is untouched.
-
-### Development build: 1.2.9-dev
-
-- Numbered steps in Markdown and structured text are spoken as “one,” “two,” and so on, while headings, ordinary numbers, and decimals remain intact. Number highlights map back to the original digits.
-- Double-click the current passage in either Edit or Preview to seek to that word. Repeated seeks replace the previous Reader stream rather than leaving overlapping narration. Preview accepts only a word index from the current local document.
-- This build introduced short synthesized opening segments for long SAPI passages. Version 1.2.10-dev replaces them with continuous playback for smoother narration.
-- Action labels now have Dark/Light, DPI-aware line icons throughout the app. The native title bar, control names, and shortcuts are unchanged.
-
-### Development build: 1.2.8-dev
-
-- Reader playback now adds short pauses between list items, clearer pauses between paragraphs and nested list levels, and a longer pause at section dividers. This applies to Markdown, plain text, OCR captures, and Auto-Read; ordinary wrapped lines stay continuous.
-- The pauses are automatic and do not alter the displayed or copied text. Windows and SAPI voices use their native speech markup for timed breaks; if a voice rejects it, the app retries the passage as plain speech. Voice-dependent punctuation timing may add to these pauses.
-- Word highlighting, double-click seeking, sentence navigation, and Reader speed continue to use the original text positions.
-
-### Development build: 1.2.7-dev
-
-- Added **Edit / Preview** tabs to Last captured text. Pasting recognizable Markdown opens a styled preview automatically; ordinary text and OCR captures stay in Edit. The source remains editable, and **Copy** copies the original Markdown.
-- Preview supports headings, formatting, lists and tasks, tables, footnotes, code, equations, safe expandable sections, and links. It follows Dark/Light appearance. Remote images remain placeholders until you choose **Load remote images** for the current document; links open in your normal browser.
-- Reader Play and Read Again, including the shortcut and tray action, speak Markdown prose instead of markup, URLs, code, or equations. Sentence navigation, word seeking in Edit, and speech highlighting remain source-aware. Expandable-section prose is spoken even when its section is collapsed.
-- Preview requires the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). If it cannot start, Edit and speech remain available. Markdown content is temporary and is not saved with settings.
-
-### Development build: 1.2.6-dev
-
-- Added a Reader-only **Reading speed** control beside the playback buttons, from **0.5× to 2.0×** in 0.1× steps, with a **1.0×** reset. It changes an active Reader passage without restarting it and remembers the choice across updates.
-- The control applies to **Play** and **Read Again** (including its shortcut and tray action), not new captures, Auto-Read, or voice previews. Windows may reject a rate for an output stream; the app then keeps the last working speed and reports it.
-
-### Development build: 1.2.5-dev
-
-- Added **Previous sentence**, **Play/Pause**, and **Next sentence** beside Last captured text. Play starts the visible passage when idle; Read Again still restarts it.
-- Sentence jumps follow punctuation and layout pauses rather than OCR line wrapping. Pausing keeps the current highlight and does not advance the playback timeout.
-- These controls affect only the reading tied to the visible text. Sentence buttons are disabled when the selected voice provides no usable word timing; the Reader explains why.
-
-### Development build: 1.2.4-dev
-
-- Added **Instant** to the persistent **Auto-Read speed: Normal / Fast / Instant** selector. Existing installations remain on Normal by default.
-- Instant checks about every 60 ms and can speak the first usable OCR result after roughly 60 ms of visual stability. Tiny/noise-like results and text very similar to the previous line still require confirmation.
-- If a typewriter-style line grows after Instant has begun speaking, only that Auto-Read request is cancelled. Intermediate fragments stay silent, and the completed line restarts after two matches and about 250 ms unchanged. Manual, queued, and overlapping voices are not cancelled.
-- Auto-Read continues to permit only one screenshot/OCR job at a time, prioritize manual captures, pause on Alt-Tab, reject stale results, suppress duplicates, re-arm after two blanks, and back off after errors.
-
-### Development build: 1.2.3-dev
-
-- Added the remembered Fast mode with shorter stable-text checks and two-result confirmation.
-- Bounded Auto-Read to one pending OCR job while preserving manual-capture priority.
-
-### Development build: 1.2.2-dev
-
-- Added **Start Auto-Read** beside the fixed capture controls, a tray toggle, and an optional configurable global shortcut (unassigned by default).
-- Auto-Read watches the selected profile's saved box without an overlay. It waits for the game window, pauses on Alt-Tab, requires two matching OCR reads before speaking, and avoids repeating unchanged dialogue.
-- Auto-Read is off at every launch. **Stop audio** also stops watching; manual fixed-box and snippet reads still work as before.
-
-### Development build: 1.2.1-dev
-
-- Added **Reader → Text extraction → Standard / Enhanced** for both fixed-box and snippet captures. Standard remains the default.
-- Enhanced keeps the normal Windows OCR result unless a bounded, prepared-image pass offers clearly better text. It does not require PowerToys or use the clipboard.
-- Extra passes run only on weak-looking captures; on difficult images they may delay speech slightly. Existing OCR corrections and custom replacements still run afterward.
-
-### Development build: 1.2.0-dev
-
-- Double-click a word during reading to seek forward or backward to that occurrence.
-- Right-click reader text for clipboard actions, **Replace Word…**, or **Add to Replacement Rules…**.
-- Stronger offline contextual corrections, with uncertain alternatives in **Corrections → Needs review**.
-- Fixed released-modifier recording and made pending shortcut changes distinct from active shortcuts.
-- Dark scrollbars now retain their theme with empty/short text and during hover or dragging.
-- The header and **About** show the version/build, application location, and settings location.
-
-### Previous release: 1.1.1
-
-- Added a shared application icon for the window, taskbar, system tray, and packaged executable.
-- Replaced light native profile prompts with dialogs that follow the current appearance.
-- Fixed combo boxes and their open drop-down lists in Dark Mode, including arrow buttons, borders, scrollbars, focus, hover, pressed, disabled, and selected states.
-- Appearance changes now update existing controls immediately without restarting the app.
-- Added regression coverage for the updated interface behavior.
-
-## Use
-
-On wide windows, the **Reader** places profiles, capture buttons, OCR mode, and Auto-Read controls in a scrollable panel on the left. The text editor or Markdown preview fills the right side, with playback controls below it. In a narrow window the capture panel closes automatically; select **Capture controls** to reopen it. Quick actions remain available above the OCR corrections and Voice & shortcuts tabs.
-
-1. Choose an installed Windows voice, speed, and volume.
-2. In **Capture area**, create or select a game profile, then select **Set capture area**. Drag inside the outlined area to move it, drag a handle to resize it, or drag elsewhere on either screen to draw a new area. The controls follow the capture monitor. Use the arrow keys to move the box by 1 px (Shift+arrows: 10 px), **Enter** to save, or **Esc** to cancel. Choose **Text extraction: Standard** for existing behavior or **Enhanced** for difficult fonts.
-3. Press the Fixed Box hotkey (default `Alt+Z`) to OCR and read the selected profile's area.
-4. Press the Quick Snippet hotkey (default `Alt+S`), drag over any text, and release. It reads that one selection without changing your Fixed Box.
-5. Select **Read Again** to replay the text currently visible in the result box without another screenshot or OCR pass. You can edit, replace, type, or paste text there first; manually entered text is spoken exactly as written, with only layout-aware pauses added.
-
-To read a Markdown document, paste it into **Last captured text**. The Reader opens **Preview** for recognizable Markdown; switch to **Edit** to change its source. You can also open Preview manually for any text. The toolbar's **Copy** action copies the source, while selecting text within Preview copies the rendered text. The Preview's **Load remote images** button is an explicit per-document choice; images do not load automatically. Reader speech uses the formatted prose in either tab, including numbered list steps. Double-click a word during playback in either tab to continue from that occurrence; switching tabs does not change the source or restart a reading.
-
-In **Last captured text**, use **Play** to begin the visible passage, **Pause** to hold its audio and highlighted word, and **Play** again to resume. **Previous sentence** and **Next sentence** jump across spoken sentence boundaries, including headings and bullet items; an ordinary wrapped OCR line stays in its sentence. Skipping while paused stays paused. The controls follow only the current passage and leave other voices alone. If a voice supplies no word timing, Play/Pause remains available but sentence skipping is disabled.
-
-Use **Reading speed** beside these controls to slow or accelerate this passage while it plays. The selected multiplier is remembered, including for **Read Again**, but does not alter the Voice & shortcuts base speed or Auto-Read timing. Extreme playback rates may sound less natural.
-
-For hands-free dialogue, select a tightly framed saved capture area around the game's dialogue text, then choose **Start Auto-Read** in the Reader tab (or the tray menu). If settings are in front, return to the game within 30 seconds; starting through an assigned Auto-Read shortcut while in the game binds it immediately. Choose **Normal** for conservative timing, **Fast** for rapid two-result confirmation, or **Instant** for the lowest safe latency. Normal checks about every 350 ms and waits roughly 500 ms for visual stability; Fast checks about every 120 ms and waits roughly 180 ms; Instant checks and settles at roughly 60 ms and can speak its first usable result. Fast and Normal require two matching corrected OCR results. Instant still confirms tiny/noisy or near-duplicate results, and if a line keeps growing it cancels only that partial Auto-Read voice, suppresses intermediate fragments, then restarts the completed line after two matches and roughly 250 ms unchanged. Standard OCR is fastest; Enhanced OCR or difficult text can take longer.
-
-The app watches only the bound game window. A new accepted line replaces the previous Auto-Read voice. Auto-Read pauses new captures when you switch away and resumes when you return. Stop it with the same button/shortcut/tray action or **Stop audio**. It reads voiced and unvoiced game dialogue alike; it cannot detect whether the game itself is speaking. An identical line must disappear long enough for two blank OCR checks before it can be read again. Auto-Read starts off each session, while the selected Normal/Fast/Instant speed is remembered across restarts and updates. Instant is optional: a true first-result mode cannot know with certainty that every game's typewriter animation is finished, so its targeted cancel-and-restart recovery is the safety net rather than a guarantee of zero partial audio.
-
-**Exclusive fullscreen games:** **Select a Snippet** opens a visual selection overlay, which may cause a true exclusive-fullscreen game to minimize or leave fullscreen. Use **Borderless** or **Windowed Fullscreen** in the game's display settings for snippet selection. If you prefer exclusive fullscreen, use a saved **Read Fixed Box** area instead; it captures without opening the selection overlay. This is a Windows fullscreen/overlay limitation, not specific to one game; see [Microsoft's DXGI fullscreen guidance](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/d3d10-graphics-programming-guide-dxgi).
-
-Capture profiles can be created, renamed, deleted, and switched without a profile limit imposed by the UI. Each region stores its Windows display identity, original display bounds/DPI, absolute coordinates, and monitor-relative coordinates. Resolution, scaling, and arrangement changes are remapped on the same display; if that display is disconnected, the app asks you to edit/select an area instead of moving it onto an unrelated screen.
-
-Enhanced OCR uses the same offline Windows recognition engine as Standard. It can enlarge or adjust an image when the original read looks weak, then conservatively choose a result. It is **not** PowerToys Text Extractor and cannot guarantee the same output as Win+Shift+T. The selected mode is saved across updates and applies to both capture shortcuts; manually typed text and Read Again do not run OCR.
-
-## OCR correction
-
-The **OCR corrections** tab controls an offline post-processing stage. The original Windows OCR result is retained, while the corrected result is displayed, copied, and spoken.
-
-- **Conservative** (default) fixes strongly supported context mistakes such as `I sow it` → `I saw it`, `don't hove` → `don't have`, `go bock` → `go back`, `I'm so scored` → `I'm so scared`, and common `I/l/1`, `S/5`, or `h/b` errors.
-- **Balanced** also uses a bundled English frequency dictionary to repair likely one-character mistakes, joined words, letter/digit confusions, and safe punctuation spacing. Its dictionary loads in the background.
-- **Strong** permits wider dictionary matches and is best used with protected terms.
-- Custom replacement rules run first. Each rule can be enabled separately and can match whole words, exact case, or any case.
-- Disabling automatic correction suppresses automatic changes and review suggestions; individually enabled custom replacement rules still run. Their output is protected from subsequent automatic correction.
-- The **▶ Play** buttons beside **Text detected by OCR** and **Replace it with** preview either field using the selected voice, speed, and the same safe 60% preview-volume cap as **Test selected voice**. Previewing does not save or change the rule.
-- Protected terms keep character names, locations, item names, and game-specific vocabulary unchanged.
-- Select **Corrections** beside the latest result to compare raw and corrected text and see why every change was made.
-- **Needs review** shows an excerpt, supported alternative, and explanation. **Apply** changes only that occurrence and retains the raw OCR and change history. **Dismiss** leaves the text unchanged. Suggestions are temporary and become invalid after a new capture or manual edit; use Replacement Rules for permanent changes.
-
-The scorer combines character-confusion candidates, grammatical patterns, nearby phrase frequencies, and evidence from names elsewhere in the passage. Frequency alone does not trigger an automatic edit. Unfamiliar capitalized names such as Xion and Yohan are not normalized to dictionary words. Unknown game terms such as Noytibos remain unchanged unless a custom rule or explicit passage evidence identifies the intended spelling.
-
-Ambiguous real words such as cove/cave and machine ports/parts, or heavily missing wording such as `t / t ace`, may be suggested for review rather than inserted into speech. This is bounded offline correction, not a general semantic reconstruction model. Windows OCR supplies no per-word confidence; correction evidence scores are not OCR confidence measurements.
-
-Correction debug logging is optional. When enabled, a size-limited `ocr_debug.log` is written next to `config.json`; normal UI status stays concise.
-
-## Interface and appearance
-
-- Choose **System**, **Dark**, or **Light** from the Appearance menu. The preference is saved automatically.
-- Profile prompts, confirmation dialogs, combo boxes, and open drop-down lists follow the active appearance. Newly opened dialogs also follow appearance changes made while the app is running.
-- The **Reader** tab gives the latest text most of the window while keeping fixed-box capture and Auto-Read in a scrollable sidebar. Edit and Preview use the full reading pane, including after resizing or maximizing.
-- The **OCR corrections** tab contains correction strength, replacements, and protected game terms.
-- The **Voice & shortcuts** tab contains speech controls and global shortcut setup. On wide or maximized windows, the two cards use side-by-side columns; they stack automatically when the window is narrower.
-- Enable **Launch when I sign in to Windows** in that tab to start quietly in the system tray with global shortcuts ready. It applies to the current Windows account and does not require administrator access.
-- **Stop audio** immediately interrupts the active utterance and clears older queued speech. It is also available from the tray menu.
-- During a capture or **Read Again**, the current visible row is shaded blue and the spoken word is highlighted in gold. Long text scrolls automatically. With overlapping voices, the newest reading owns the highlight.
-- While that visible passage is being read, double-click a word to continue from that exact occurrence. Seeking stops other voices and discards pending readings, but does not change your saved speech mode. It uses the existing audio stream when seeking and word timings are available; otherwise it synthesizes only the suffix from the selected word. When idle, double-click retains normal word selection.
-- Right-click a selection (or a word under the pointer) for **Copy**, **Cut**, **Paste**, **Select All**, **Replace Word…**, and **Add to Replacement Rules…**. Both rule actions open the existing dialog with pronunciation previews. Replace Word saves a rule and replaces just the selected occurrence; Add to Replacement Rules only saves it for future OCR. An existing matching rule is edited instead of duplicated. Cancel makes no changes.
-- Speed and volume changes are saved automatically, including changes made with the sliders.
-- **Test selected voice** uses a 60% preview cap to avoid an unexpected blast; normal reads still use the saved volume.
-- OCR line layout is retained in displayed and copied text. For speech, ordinary wrapped lines remain continuous, while headings, visually separate blocks, and bullet items receive natural punctuation pauses; bullet symbols themselves are not spoken.
-- SAPI voice previews and readings use verified PCM metadata before MediaPlayer playback, preventing format-related distortion.
-- **New capture while speaking** defaults to replacing the current line immediately. Queue mode lets the current line finish first. **Allow overlapping lines** starts a new voice while the current one continues; the maximum number of simultaneous readings can be set from 2 to 4. Overlap is capped to keep audio resources bounded.
-- Window size, position, and normal/maximized state are restored. Capture and speech operations never write transient minimized geometry over that preference.
-
-Global shortcut reads minimize settings without hiding them to the tray. One persistent OCR worker replaces obsolete pending jobs and publishes only the newest result. Speech uses bounded playback sessions: replace mode keeps one newest line, queue mode keeps one next line, and overlap mode starts separate sessions up to the configured limit. SAPI voices are synthesized into memory before MediaPlayer playback, so rapid captures do not repeatedly purge a live SAPI audio device. Replacements use an isolated MediaPlayer channel and keep the previous stream alive briefly while Windows finishes its asynchronous handoff, preventing transition bursts.
-
-Choose **Record** beside Read Fixed Box, Select a Snippet, Read Again, or Toggle Auto-Read, then press any supported Windows combination such as `Ctrl+Shift+T`, `Alt+Q`, `Shift+F8`, or `Ctrl+Shift+Space`. The Auto-Read shortcut starts unassigned. Shortcuts can be cleared individually. Windows registration detects conflicts with this app and other programs before a setting is saved; `F12` is rejected because Windows reserves it.
-
-Click **Apply shortcuts** after recording or clearing a shortcut. The form marks unapplied changes, while the header continues showing the active combination. Apply unregisters the old set, registers the complete new set, and only then saves; failures restore the previous working set where possible and report the actual registration status. If a custom snippet key still fails, check the header build and executable location in **About**, exit older running copies, and enable OCR debug logging to record registration, key dispatch, and snippet-overlay launch events.
-
-Windows OCR, its event loop, SAPI voice tokens/player, and WinRT synthesizer/media player remain alive on their dedicated workers for repeated dialogue captures. When OCR debug logging is enabled, the same rotating log includes measured dispatch, capture, OCR, correction, and speech-start timings.
-
-Settings persist in `%LOCALAPPDATA%\GameTextReader\config.json`, independently of the extracted application folder. That keeps appearance, voices, shortcuts, profiles, capture areas, OCR rules, speech behavior, window placement, and startup preference across updates. The first updated launch automatically imports an older `config.json` when it remains beside the application. If the old copy is in a different folder, use **Voice & shortcuts → Settings and updates → Import settings from older app folder…** once, then restart the app. The old file is retained and an existing AppData configuration is backed up before a manual import.
-
-Manually typed reading text is temporary and is not restored after restarting. Settings are local to the current Windows account and computer. Windows organization policies or disabling the app in Windows **Startup Apps** can override its launch-at-sign-in preference.
-
-## Troubleshooting audio bursts
-
-On some Realtek/DTS audio devices, rapidly starting another reading can produce a short `brrrt` or distorted burst even though the generated speech and a Stereo Mix/Audacity recording sound clean. This points to the Windows output-device processing path rather than damaged OCR or speech audio.
-
-On Windows 11, open **Quick Settings → Sound output**, select the affected playback device, and change **Spatial sound** from **Off** to **Windows Sonic for Headphones**. Windows Sonic has been confirmed to remove these bursts on an affected Realtek device by using a more stable Windows audio-processing path. If the problem remains, also try disabling other DTS/Realtek audio enhancements or testing a different output device.
-
-## Build the Windows app
-
-Install the project requirements and PyInstaller in a virtual environment, then build from the repository folder:
-
-```powershell
-python -m pip install -r requirements.txt
-python -m pip install pyinstaller
-python -m PyInstaller GameTextReader.spec --noconfirm
-```
-
-The packaged application is created in `dist/GameTextReader`.
-Release packages should not contain `config.json`; each user's settings are created in Windows AppData on first launch.
-The tracked version in `app_version.py` is shared by the header and executable metadata. Packaging freezes a UTC timestamp/source-revision build identifier into `_internal/build_info.json`; Git is not needed to identify a packaged build. A development build made from uncommitted changes is marked `dirty`.
-
-## Verify
-
-```powershell
-python -m unittest discover -v
-```
-
-The test suite verifies correction, profile migration/CRUD/display mapping, update-safe settings migration/import, window restoration and DPI layout, editable Read Again text, live word progress, sentence mapping, Reader playback and speed controls, themed scrollbars, pronunciation previews, Windows startup registration, Normal/Fast/Instant Auto-Read timing and recovery, targeted request cancellation, deduplication, bounded pending work and stale-job rejection, newest-job replacement, reusable OCR/TTS sessions, speech replace/queue/overlap policies, native Windows OCR, speech interruption/playback, shortcut parsing, actual callback dispatch, and OS-level shortcut conflicts.
-
-## App icon assets
-
-The flat source mark is stored in `assets/app_icon.svg`. Runtime PNGs and the multi-size Windows ICO are generated from that source and shared by the main window, taskbar, system tray, and packaged executable.
-
-To regenerate the exported icon assets on Windows with Microsoft Edge and Pillow installed:
-
-```powershell
-python tools/build_icon_assets.py
-```
-
-Button icons are separate themed line assets in `assets/action_icons`. To regenerate their 16, 24, and 32 px versions with Pillow, run `python tools/build_action_icons.py`.
+The earlier Python version (1.2.10-dev and before) is no longer in this folder. Its source remains in the Git history, and it reads the same settings file.
