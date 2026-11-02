@@ -94,6 +94,52 @@ public class UiTests
         window.UpdateLayout(); var image = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32); image.Render(window); var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(image)); var folder = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.WorkDirectory, "ui-artifacts")); Directory.CreateDirectory(folder); using var stream = File.Create(Path.Combine(folder, name)); png.Save(stream);
     }
     [Test]
+    public void DoubleClickingAPreviewWordReadsFromThatWordWhenStoppedOrPaused()
+    {
+        EnsureApplication(); var folder = Path.Combine(Path.GetTempPath(), "gtr-dblclick-test-" + Guid.NewGuid()); Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "config.json"); var store = new ConfigStore(path); var settings = store.Load(); settings.Volume = 0; store.Save(settings);
+        var window = new MainWindow(path, true); window.Show();
+        try
+        {
+            const string source = "First sentence is short. Video was earning normally until the countdown ended, then the live stream started at noon and kept going for a long time. The last sentence closes the passage.";
+            window.SetText(source, true); var preview = (WebView2CompositionControl)window.FindName("Preview");
+            const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
+            T Field<T>(string name) => (T)typeof(MainWindow).GetField(name, fields)!.GetValue(window)!;
+            PumpUntil(() => preview.CoreWebView2 != null && Field<long>("renderedRevision") >= 0);
+            var document = SpeechText.Prepare(source, true); int Index(string word) => document.Words.ToList().FindIndex(w => source[w.SourceStart..w.SourceEnd] == word);
+            void DoubleClick(int index) => Script(preview, $"getSelection().selectAllChildren(document.body); document.querySelector('[data-reader-word-index=\"{index}\"]').dispatchEvent(new MouseEvent('mousedown',{{bubbles:true,cancelable:true,detail:2}})); document.querySelector('[data-reader-word-index=\"{index}\"]').dispatchEvent(new MouseEvent('mousedown',{{bubbles:true,cancelable:true,detail:3}}))");
+            var countdown = Index("countdown"); Assert.That(Field<long>("currentRequest"), Is.EqualTo(0L));
+            DoubleClick(countdown);
+            PumpUntil(() => Field<long>("currentRequest") > 0 && Field<int>("currentOffset") == document.Words[countdown].SourceStart && !Field<bool>("paused"), 30000);
+            Assert.That(Script(preview, "getSelection().isCollapsed"), Is.EqualTo("true"), "The browser selection must not cover the spoken word.");
+            ((Button)window.FindName("PlayButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); PumpUntil(() => Field<bool>("paused"));
+            var noon = Index("noon"); DoubleClick(noon);
+            PumpUntil(() => !Field<bool>("paused") && Field<int>("currentOffset") >= document.Words[noon].SourceStart, 10000);
+        }
+        finally { CloseFixture(window, folder); }
+    }
+    [Test]
+    public void ReplacementRuleCheckboxSavesEnabledState()
+    {
+        EnsureApplication(); var folder = Path.Combine(Path.GetTempPath(), "gtr-rule-toggle-test-" + Guid.NewGuid()); Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "config.json"); var store = new ConfigStore(path); var settings = store.Load(); settings.Ocr.Replacements = [new() { Original = "Live", Replacement = "Liv" }]; store.Save(settings);
+        var window = new MainWindow(path, true); window.Show();
+        try
+        {
+            var rules = (ListBox)window.FindName("Rules"); DependencyObject item = rules; while (item is not TabItem) item = LogicalTreeHelper.GetParent(item); ((TabItem)item).IsSelected = true; PumpUntil(() => rules.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem { IsLoaded: true });
+            var container = (ListBoxItem)rules.ItemContainerGenerator.ContainerFromIndex(0); var box = FindChild<CheckBox>(container)!;
+            var click = typeof(CheckBox).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            click.Invoke(box, null); Assert.That(new ConfigStore(path).Load().Ocr.Replacements.Single().Enabled, Is.False);
+            click.Invoke(box, null); Assert.That(new ConfigStore(path).Load().Ocr.Replacements.Single().Enabled, Is.True);
+        }
+        finally { CloseFixture(window, folder); }
+    }
+    private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent); i++) { var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i); if (child is T match) return match; if (FindChild<T>(child) is { } nested) return nested; }
+        return null;
+    }
+    [Test]
     public void ProgressCoalescesAndPreviewRestoresOnlyCurrentDocumentWord()
     {
         EnsureApplication(); var folder = Path.Combine(Path.GetTempPath(), "gtr-progress-test-" + Guid.NewGuid()); Directory.CreateDirectory(folder);

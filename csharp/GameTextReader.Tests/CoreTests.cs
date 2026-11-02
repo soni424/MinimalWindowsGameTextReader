@@ -46,6 +46,7 @@ public class CoreTests
         Assert.That(s.Ocr.Strength, Is.EqualTo("strong")); Assert.That(s.Ocr.Replacements.Count, Is.EqualTo(2)); Assert.That(s.Profiles.Count, Is.EqualTo(2));
     }
     [Test] public void FractionalReaderRateAndVolumeSurviveRoundTrip() { var s = SettingsCodec.Read("{\"volume\":73.54,\"speech\":{\"reader_playback_rate\":0.9}}"); var restored = SettingsCodec.Read(SettingsCodec.Write(s)); Assert.That(restored.Volume, Is.EqualTo(73.54)); Assert.That(restored.Speech.ReaderPlaybackRate, Is.EqualTo(.9)); }
+    [Test] public void SwitchesSavedOffStayOffAfterReload() { var s = SettingsCodec.Read("{\"ocr\":{\"enabled\":false,\"replacements\":[{\"original\":\"Live\",\"replacement\":\"Liv\",\"enabled\":false}]}}"); var restored = SettingsCodec.Read(SettingsCodec.Write(s)); Assert.That(restored.Ocr.Enabled, Is.False); Assert.That(restored.Ocr.Replacements.Single().Enabled, Is.False); }
     [Test]
     public void InvalidProfileIdentityAndPositionDoNotDiscardValidSettings()
     {

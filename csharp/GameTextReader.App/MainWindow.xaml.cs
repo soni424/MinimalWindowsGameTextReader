@@ -332,8 +332,10 @@ public partial class MainWindow : Window
     }
     private async void LoadImages(object sender, RoutedEventArgs e) { if (rendered == null || !Dialogs.Confirm(this, "Load remote images", "Load this document’s images from their websites? This shares your network address with those sites.")) return; imagesApproved = true; LoadImagesButton.Visibility = Visibility.Collapsed; await Preview.ExecuteScriptAsync("window.readerLoadImages(" + JsonSerializer.Serialize(rendered.Images) + ");"); }
     private static void OpenExternal(string url) { if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && new[] { "http", "https", "mailto" }.Contains(uri.Scheme)) Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-    private void SeekPreview(int index) { var document = PrepareDocument(); if (renderedRevision != revision || currentRequest == 0 || index < 0 || index >= document.Words.Count) return; playbackRevision = speech.Seek(currentRequest, Editor.Text, document.Words[index].SourceStart, true, true); }
-    private void EditorDoubleClick(object sender, MouseButtonEventArgs e) { if (currentRequest == 0) return; var position = Editor.GetPositionFromPoint(e.GetPosition(Editor)); if (position == null) return; var offset = Editor.Document.GetOffset(position.Value.Line, position.Value.Column); playbackRevision = speech.Seek(currentRequest, Editor.Text, offset, true, true); e.Handled = true; }
+    private void SeekPreview(int index) { var document = PrepareDocument(); if (renderedRevision != revision || index < 0 || index >= document.Words.Count) return; ReadFrom(document.Words[index].SourceStart); }
+    private void EditorDoubleClick(object sender, MouseButtonEventArgs e) { var position = Editor.GetPositionFromPoint(e.GetPosition(Editor)); if (position == null) return; ReadFrom(Editor.Document.GetOffset(position.Value.Line, position.Value.Column)); e.Handled = true; }
+    // Double-click means "read from here": start if stopped, resume if paused.
+    private void ReadFrom(int offset) { if (currentRequest == 0) StartReader(false); if (currentRequest > 0) playbackRevision = speech.Seek(currentRequest, Editor.Text, offset, true, false); }
     private void QueueProgress(SpeechProgress value)
     {
         if (value.RequestId != Volatile.Read(ref currentRequest)) return;
@@ -423,6 +425,7 @@ public partial class MainWindow : Window
     private void AddRule(object sender, RoutedEventArgs e) => EditReplacement(null);
     private void EditRule(object sender, RoutedEventArgs e) { if (Rules.SelectedItem is ReplacementRule rule) EditReplacement(rule); }
     private void RuleDoubleClick(object sender, MouseButtonEventArgs e) => EditRule(sender, e);
+    private void RuleEnabledChanged(object sender, RoutedEventArgs e) { if (!Persist()) Rules.ItemsSource = settings.Ocr.Replacements.ToArray(); }
     private void DeleteRule(object sender, RoutedEventArgs e) { if (Rules.SelectedItem is ReplacementRule rule) { settings.Ocr.Replacements.Remove(rule); Persist(); Rules.ItemsSource = settings.Ocr.Replacements.ToArray(); } }
     private ReplacementRule? EditReplacement(ReplacementRule? existing, string original = "")
     {

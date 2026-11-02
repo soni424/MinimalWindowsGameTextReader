@@ -141,5 +141,26 @@ public class NativeTests
         document = document with { Pauses = [new SpeechPause(document.Words[3].SpokenStart, document.Words[3].SourceStart, 250)] };
         await Check(document, options, false); await Check(document, options, true);
     }
+    [TestCase("winrt")]
+    [TestCase("sapi")]
+    public async Task SeekingWhilePlayingContinuesFromTheChosenWord(string backend)
+    {
+        var voices = await SpeechService.ListVoicesAsync();
+        var saved = File.Exists(ConfigStore.DefaultPath) ? SettingsCodec.Read(File.ReadAllText(ConfigStore.DefaultPath)).Voice : "";
+        var voice = voices.FirstOrDefault(v => v.Backend == backend && v.Id == saved) ?? voices.First(v => v.Backend == backend);
+        using var speech = new SpeechService(false, true);
+        var source = "First sentence is short. Video was earning normally until the countdown ended, then the live stream started at noon and kept going for a long time. The last sentence closes the passage.";
+        var document = SpeechText.Prepare(source); var events = new System.Collections.Concurrent.ConcurrentQueue<SpeechProgress>(); speech.Progress += events.Enqueue;
+        var finished = false; speech.Finished += (_, _) => finished = true;
+        var id = speech.Submit(document, new(voice.Id, 0, 0, PlaybackRate: .9, Reader: true)); await WaitForPlayer(speech, id);
+        for (var attempt = 0; attempt < 200 && events.Count < 2; attempt++) await Task.Delay(20);
+        var target = document.Words.ToList().FindIndex(w => source[w.SourceStart..w.SourceEnd] == "noon");
+        var control = speech.Seek(id, source, document.Words[target].SourceStart, true, true);
+        for (var attempt = 0; attempt < 150 && !events.Any(p => p.PlaybackRevision >= control && p.WordIndex > target); attempt++) await Task.Delay(20);
+        var after = events.Where(p => p.PlaybackRevision >= control).Select(p => p.WordIndex).ToArray();
+        TestContext.Out.WriteLine($"{voice.Name}: words after seek {string.Join(",", after)}; finished={finished}");
+        Assert.That(finished, Is.False, "Seeking while playing must not end the reading.");
+        Assert.That(after.First(), Is.EqualTo(target)); Assert.That(after, Has.Some.GreaterThan(target), "Playback continues past the chosen word.");
+    }
     private static async Task WaitForRevision(SpeechService speech, long id, int revision) { for (int i = 0; i < 300; i++) { if ((await speech.DiagnosticsAsync()).Any(s => s.Id == id && s.Revision >= revision && s.HasPlayer && s.Ready)) return; await Task.Delay(100); } Assert.Fail("The replacement speech stream did not become ready."); }
 }

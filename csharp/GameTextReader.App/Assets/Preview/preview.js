@@ -46,9 +46,12 @@ window.readerLoadImages = urls => {
     e.appendChild(image); e.classList.add('loaded');
   });
 };
-content.addEventListener('dblclick', e => {
-  const word = e.target.closest('[data-reader-word-index]');
+// WPF's WebView2 host turns a double-click into presses counted 2 and 3 with no 'dblclick',
+// so act on the second press and block the selection that would cover the spoken word.
+content.addEventListener('mousedown', e => {
+  const word = e.button === 0 && e.detail >= 2 ? e.target.closest('[data-reader-word-index]') : null;
   if (!word) return;
+  e.preventDefault(); window.getSelection()?.removeAllRanges();
   const index = Number(word.dataset.readerWordIndex);
-  if (Number.isInteger(index) && index >= 0) window.chrome.webview.postMessage({kind:'seek',index,revision});
+  if (e.detail === 2 && Number.isInteger(index) && index >= 0) window.chrome.webview.postMessage({kind:'seek',index,revision});
 });

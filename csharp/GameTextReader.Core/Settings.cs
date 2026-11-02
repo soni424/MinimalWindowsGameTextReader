@@ -89,6 +89,7 @@ public static class SettingsCodec
     {
         var root = JsonNode.Parse(json) as JsonObject ?? throw new InvalidDataException("Settings must be a JSON object.");
         var defaults = JsonSerializer.SerializeToNode(new AppSettings(), Json)!.AsObject();
+        static JsonValueKind Kind(JsonNode node) => node.GetValueKind() is JsonValueKind.False ? JsonValueKind.True : node.GetValueKind(); // true and false are both a valid bool
         void Sanitize(JsonObject actual, JsonObject expected)
         {
             foreach (var entry in actual.ToList())
@@ -96,7 +97,7 @@ public static class SettingsCodec
                 if (!expected.TryGetPropertyValue(entry.Key, out var sample) || sample == null) continue;
                 if (sample is JsonObject model) { if (entry.Value is JsonObject child) Sanitize(child, model); else actual.Remove(entry.Key); }
                 else if (sample is JsonArray) { if (entry.Value is not JsonArray) actual.Remove(entry.Key); }
-                else if (sample is JsonValue && entry.Value is JsonValue value && sample.GetValueKind() == value.GetValueKind())
+                else if (sample is JsonValue && entry.Value is JsonValue value && Kind(sample) == Kind(value))
                 {
                     if (sample.GetValueKind() == JsonValueKind.Number && entry.Key is not ("volume" or "reader_playback_rate") && sample.ToJsonString().IndexOf('.') < 0 && value.TryGetValue<double>(out var number) && double.IsFinite(number)) actual[entry.Key] = (long)Math.Clamp(number, int.MinValue, int.MaxValue);
                 }
@@ -141,7 +142,7 @@ public static class SettingsCodec
         // Invalid individual values must not prevent recovery of the rest of a saved profile.
         foreach (var entry in root.ToList())
         {
-            if (defaults[entry.Key] is JsonValue expected && entry.Value is JsonValue value && expected.GetValueKind() != value.GetValueKind()) root.Remove(entry.Key);
+            if (defaults[entry.Key] is JsonValue expected && entry.Value is JsonValue value && Kind(expected) != Kind(value)) root.Remove(entry.Key);
         }
         AppSettings settings;
         try { settings = root.Deserialize<AppSettings>(Json) ?? new(); }
