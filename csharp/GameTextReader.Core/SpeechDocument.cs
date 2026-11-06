@@ -27,6 +27,12 @@ public static class SpeechText
     private static readonly Regex Rule = new(@"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$");
     private static readonly Regex TrailingPause = new("[.,!?…;:][\"'”’\\])}]*$");
     private static readonly HashSet<string> Abbreviations = ["mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc"];
+    // "live" is respelled for the voice unless nearby words show the real-time sense ("laiv").
+    // shortcut: fixed word lists, not grammar parsing, so "all you can do is live" stays "laiv"; add cues as misreads are reported.
+    private const string RealTimeBefore = @"\b(?:a|an|the|my|your|his|her|our|their|this|xbox|facebook|instagram|youtube|tiktok|twitch|perform|performs|performed|performing|broadcast|broadcasting|streamed|streaming|aired|airing|televised|reporting)\s+|\bcoming\s+to\s+you\s+|(?:\b(?:am|is|are|was|were|be|been|being|isn['’]t|aren['’]t|wasn['’]t|weren['’]t)|(?<!\blet)['’](?:s|re|m))\s+(?:(?:not|now|still|currently|already)\s+)?";
+    private const string RealTimeAfter = @"\s+(?:streams?|streaming|broadcasts?|shows?|music|concerts?|events?|audience|tv|television|radio|feeds?|news|coverage|action|performances?|band|album|recordings?|ammo|ammunition|rounds?|wires?|bait|animals?|chats?|updates?|demos?|data|match|matches|games?|sessions?|fire|grenades?|footage|videos?|commentary)\b|\s+on\s+(?:the\s+)?(?:air|stage|tv|television|camera|radio|twitch|youtube)\b|\s+in\s+(?:concert|studio)\b|\s+from\b(?!\s+(?:hand|day|week|paycheck|now|then)\b)";
+    private const string GoLive = @"(?:(?<!\b(?:go|goes|going|went|gone)\s+)|(?=live\s+(?:with|there|here|alone|together|in\s+(?:the|a|an|my|your|his|her|our|their|this|that|peace))\b))";
+    private static readonly Regex VerbLive = new($@"(?<![\w\-])(?<!{RealTimeBefore}){GoLive}live(?![\w\-]|['’]\w)(?!{RealTimeAfter})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     public static bool LooksLikeMarkdown(string text) => Regex.IsMatch(text, @"(?m)^\s{0,3}(?:#{1,6}\s|>\s|[-+*]\s|\d+[.)]\s|\|.+\|\s*$)|\*\*[^*]+\*\*|\[[^]]+\]\([^)]+\)|```|\$\$|\[\^[^]]+\]:");
     public static string Cardinal(int value)
     {
@@ -158,7 +164,8 @@ public static class SpeechText
     {
         var markup = structured && document.Pauses.Count > 0;
         var decorative = document.SpokenText.EnumerateRunes().Any(r => r.Utf16SequenceLength > 1 && Rune.GetUnicodeCategory(r) == System.Globalization.UnicodeCategory.OtherSymbol);
-        if (!markup && !decorative) return new(document.SpokenText, Enumerable.Range(0, document.SpokenText.Length + 1).ToArray(), false);
+        var verbLive = VerbLive.Matches(document.SpokenText).Select(m => m.Index).ToHashSet();
+        if (!markup && !decorative && verbLive.Count == 0) return new(document.SpokenText, Enumerable.Range(0, document.SpokenText.Length + 1).ToArray(), false);
         var text = new StringBuilder(); var map = new List<int>();
         void Emit(string value, int offset) { text.Append(value); map.AddRange(Enumerable.Repeat(offset, value.Length)); }
         if (markup && !sapi) Emit($"<speak version=\"1.0\" xmlns=\"http://www.w3.org/2001/10/synthesis\" xml:lang=\"{WebUtility.HtmlEncode(language)}\">", 0);
@@ -166,6 +173,13 @@ public static class SpeechText
         for (int i = 0; i < document.SpokenText.Length; i++)
         {
             if (markup && pauses.TryGetValue(i, out var delay)) Emit(sapi ? $"<silence msec=\"{delay}\"/>" : $"<break time=\"{delay}ms\"/>", i);
+            if (verbLive.Contains(i))
+            {
+                // Mixed case on purpose: an all-caps "LIV" risks being read as a Roman numeral.
+                Emit(document.SpokenText[i].ToString(), i); Emit("i", i + 1); Emit("v", i + 2);
+                i += 3;
+                continue;
+            }
             if (char.IsSurrogatePair(document.SpokenText, i) && Rune.GetUnicodeCategory(new Rune(char.ConvertToUtf32(document.SpokenText, i))) == System.Globalization.UnicodeCategory.OtherSymbol)
             {
                 // These decorative, non-word symbols corrupt word positions in

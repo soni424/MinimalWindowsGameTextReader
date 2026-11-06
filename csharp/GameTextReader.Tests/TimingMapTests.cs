@@ -19,6 +19,56 @@ public class TimingMapTests
         var mapped = SpeechService.MapTimings([new(0, start, start + 4)], input, doc).Single();
         Assert.That(doc.SourceText[doc.Words[mapped.WordIndex].SourceStart..doc.Words[mapped.WordIndex].SourceEnd], Is.EqualTo("Café"));
     }
+    [TestCase("I want to live.")]
+    [TestCase("Long live the king!")]
+    [TestCase("Where do you live?")]
+    [TestCase("Let's live here.")]
+    [TestCase("We live in a small town.")]
+    [TestCase("Live long and prosper.")]
+    [TestCase("They will go live with her.")]
+    [TestCase("It's where we live from now on.")]
+    [TestCase("YOU WILL LIVE.")]
+    public void LiveMeaningToExistIsRespelledForTheVoice(string source)
+    {
+        foreach (var structured in new[] { true, false })
+            Assert.That(SpeechText.Synthesis(SpeechText.Prepare(source), true, structured: structured).Text, Does.Match("(?i)\\bliv\\b").And.Not.Match("(?i)\\blive\\b"));
+    }
+
+    [TestCase("We are live.")]
+    [TestCase("We're now live.")]
+    [TestCase("The live show starts soon.")]
+    [TestCase("Watch this live stream.")]
+    [TestCase("They perform live every week.")]
+    [TestCase("We go live soon.")]
+    [TestCase("Going live in five minutes.")]
+    [TestCase("Live from the arena!")]
+    [TestCase("Live on stage tonight.")]
+    [TestCase("A live-action movie.")]
+    public void LiveMeaningRealTimeIsLeftForTheVoice(string source)
+    {
+        Assert.That(SpeechText.Synthesis(SpeechText.Prepare(source), true).Text, Is.EqualTo(source));
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void RespelledLiveKeepsDocumentAndHighlightOffsets(bool structured)
+    {
+        foreach (var source in new[] { "They live here.", "Where they LIVE", "Heading\n\n- They live.\n- Next line." })
+        {
+            var doc = SpeechText.Prepare(source);
+            var input = SpeechText.Synthesis(doc, true, structured: structured);
+            var word = doc.Words.Single(w => doc.SpokenText[w.SpokenStart..w.SpokenEnd].Equals("live", StringComparison.OrdinalIgnoreCase));
+            var start = Array.IndexOf(input.NativeToSpoken, word.SpokenStart);
+            while (input.Text[start] == '<') start = input.Text.IndexOf('>', start) + 1;
+            Assert.That(input.Text.Substring(start, 3), Is.EqualTo("liv").IgnoreCase);
+            Assert.That(input.NativeToSpoken.Length, Is.EqualTo(input.Text.Length + 1));
+            var mapped = SpeechService.MapTimings([new(0, start, start + 3)], input, doc).Single();
+            Assert.That(doc.SourceText[doc.Words[mapped.WordIndex].SourceStart..doc.Words[mapped.WordIndex].SourceEnd], Is.EqualTo("live").IgnoreCase);
+            Assert.That(mapped.End, Is.EqualTo(word.SpokenEnd));
+            Assert.That(doc.SpokenText, Does.Contain("live").IgnoreCase);
+        }
+    }
+
     [Test]
     public void MalformedNativeBoundariesAreRejectedBeforeIndexing()
     {

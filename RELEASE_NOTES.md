@@ -1,5 +1,9 @@
 # Game Text Reader 2.0.0-dev — C# development port
 
+## Pronunciation
+
+- "live" is now spoken as "liv" (to exist) unless nearby words show the real-time sense ("laiv"), as in "we are live" or "live stream". The displayed text, copied text and word highlighting are unchanged.
+
 ## Capture and Auto-Read fixes
 
 - Read fixed box now minimizes the app first when its window covers the capture area, so the app no longer reads its own interface.
