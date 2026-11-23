@@ -140,6 +140,27 @@ public class CoreTests
         var text = "# Title\n\n1. **Observation:** Repeat repeat.\n\n<script>alert('x')</script><img src='https://evil/a'>\n\n![Diagram](https://example.com/a.png)\n\n[Bad](javascript:alert(1))"; var d = SpeechText.Prepare(text, true); var preview = MarkdownService.Render(text, d);
         Assert.That(preview.Html, Does.Not.Contain("<script").And.Not.Contain("<img").And.Not.Contain("javascript:")); Assert.That(preview.Images, Is.EqualTo(new[] { "https://example.com/a.png" })); Assert.That(preview.Html, Does.Contain("data-reader-word-index")); Assert.That(d.SpokenText, Does.Contain("one: Observation"));
     }
+    [Test] public void LongSingleMarkdownLinePreparesInLinearTime()
+    {
+        // An 80k-character line took ~2.9 s when inline parsing copied the rest of the line per character.
+        var sentence = "The **quick** fox [jumps](https://example.com) &amp; runs. "; var line = string.Concat(Enumerable.Repeat(sentence, 80_000 / sentence.Length));
+        SpeechText.Prepare(sentence, true); var watch = Stopwatch.StartNew(); var d = SpeechText.Prepare(line, true); watch.Stop();
+        Assert.That(watch.ElapsedMilliseconds, Is.LessThan(1000)); Assert.That(d.SpokenText, Does.StartWith("The quick fox jumps & runs."));
+        Assert.That(d.SourceText[d.Words[3].SourceStart..d.Words[3].SourceEnd], Is.EqualTo("jumps"));
+    }
+    [Test] public void SentencePiecesCoverEveryWordOnceInOrder()
+    {
+        var d = SpeechText.Prepare(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "science-sample.md")), true);
+        var pieces = new List<SpeechDocument>(); var rest = d;
+        for (int chars = 40; rest.Words.Count > 0; chars *= 2)
+        {
+            var cut = rest.Sentences.FirstOrDefault(s => s.SpokenStart >= chars); var head = cut == null ? rest : rest.Until(cut.SpokenStart); pieces.Add(head);
+            Assert.That(head.Pauses.All(p => p.SpokenOffset < head.SpokenText.Length) && head.Words.All(w => w.SpokenEnd <= head.SpokenText.Length), Is.True);
+            rest = cut == null ? new(d.SourceText, "", [], [], []) : rest.FromSource(cut.SourceStart);
+        }
+        Assert.That(pieces.Count, Is.GreaterThan(3));
+        Assert.That(pieces.SelectMany(p => p.Words.Select(w => (w.SourceStart, w.SourceEnd))), Is.EqualTo(d.Words.Select(w => (w.SourceStart, w.SourceEnd))));
+    }
     [Test] public void SourceMappedSuffixRetainsPausesAndFullSource() { var d = SpeechText.Prepare("# Title\n\n- **Label:** explanation\n- next", true); var offset = d.SourceText.IndexOf("explanation", StringComparison.Ordinal); var suffix = d.FromSource(offset); Assert.That(suffix.SourceText, Is.EqualTo(d.SourceText)); Assert.That(suffix.Words[0].SourceStart, Is.EqualTo(offset)); Assert.That(suffix.Pauses.All(p => p.SpokenOffset > 0), Is.True); }
     [Test] public void OrderedMarkersAndExpandableHtmlAreSourceMapped() { var source = "1. **Observe:** repeat\n2. **Question:** repeat\n\n<details><summary>More</summary>Extra prose.</details>"; var d = SpeechText.Prepare(source, true); var html = MarkdownService.Render(source, d).Html; Assert.That(html, Does.Contain("ordered-marker").And.Contain(">1.</span>").And.Contain(">2.</span>")); var extra = d.Words.ToList().FindIndex(w => w.SourceStart == source.IndexOf("Extra", StringComparison.Ordinal)); Assert.That(html, Does.Contain($"data-reader-word-index=\"{extra}\">Extra</span>")); }
     [Test]

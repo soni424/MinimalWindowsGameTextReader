@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using GameTextReader.Core;
 using Windows.Media.Core;
 using Windows.Media.Playback;
@@ -17,11 +16,15 @@ public sealed class SpeechService : IDisposable
 {
     internal sealed record Timing(double Seconds, int Start, int End, int WordIndex = -1);
     private sealed record Audio(byte[] Bytes, Timing[] Timings);
+    // Play starts after a short first piece; each later piece is twice as long and is synthesized while the one before it plays.
+    // Tests that check native offsets across a whole document set int.MaxValue to synthesize it in one piece.
+    internal int FirstPieceChars { get; init; } = 40;
+    private sealed record Piece(SpeechDocument From, SpeechDocument Head, Task<Audio> Audio, int Revision);
     private sealed class Request(long id, SpeechDocument document, SpeechOptions options)
     {
         public long Id = id; public SpeechDocument Document = document; public readonly SpeechDocument FullDocument = document; public SpeechOptions Options = options;
         public readonly CancellationTokenSource Cancel = new(); public MediaPlayer? Player; public InMemoryRandomAccessStream? Stream; public NativeSapiVoice? Sapi; public WinSynth? Winrt;
-        public Timing[] Timings = []; public int[] FullWordIndices = []; public int TimingCursor = -1; public int Revision, LastWord = -1; public bool Paused, Started, Finished, RateReady, Cached; public long StartTicks, PlaybackRevision, RateRevision; public int SourceOffset; public DateTime PreparingSince = DateTime.UtcNow;
+        public Timing[] Timings = []; public int[] FullWordIndices = []; public int TimingCursor = -1; public int Revision, LastWord = -1; public bool Paused, Started, Finished, RateReady, Cached; public long StartTicks, PlaybackRevision, RateRevision; public int SourceOffset; public int PieceChars; public Piece? Next;
     }
     private readonly Thread thread; private readonly TaskCompletionSource<System.Windows.Forms.Control> ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Dictionary<long, Request> active = []; private readonly System.Windows.Forms.Timer poll = new() { Interval = 20 };
@@ -44,7 +47,7 @@ public sealed class SpeechService : IDisposable
     }
     public Task<IReadOnlyList<SpeechDiagnostic>> DiagnosticsAsync()
     {
-        var result = new TaskCompletionSource<IReadOnlyList<SpeechDiagnostic>>(TaskCreationOptions.RunContinuationsAsynchronously); Post(() => result.SetResult(active.Values.Select(r => new SpeechDiagnostic(r.Id, r.Player != null, r.Paused, r.Timings.Length > 0, r.Player?.PlaybackSession.PlaybackRate ?? r.Options.PlaybackRate, r.SourceOffset, r.Revision, r.Cached, r.RateReady, r.Player?.PlaybackSession.Position.TotalSeconds ?? 0, r.Player?.PlaybackSession.NaturalDuration.TotalSeconds ?? 0)).ToArray())); return result.Task;
+        var result = new TaskCompletionSource<IReadOnlyList<SpeechDiagnostic>>(TaskCreationOptions.RunContinuationsAsynchronously); Post(() => result.SetResult(active.Values.Select(r => new SpeechDiagnostic(r.Id, r.Player != null, r.Paused, r.Timings.Length > 0, (r.RateReady ? r.Player?.PlaybackSession.PlaybackRate : null) ?? r.Options.PlaybackRate, r.SourceOffset, r.Revision, r.Cached, r.RateReady, r.Player?.PlaybackSession.Position.TotalSeconds ?? 0, r.Player?.PlaybackSession.NaturalDuration.TotalSeconds ?? 0)).ToArray())); return result.Task;
     }
     private void Post(Action action)
     {
@@ -82,7 +85,7 @@ public sealed class SpeechService : IDisposable
     public long Submit(SpeechDocument document, SpeechOptions options)
     {
         ObjectDisposedException.ThrowIf(stopping || disposed, this);
-        var request = new Request(Interlocked.Increment(ref nextId), document, options);
+        var request = new Request(Interlocked.Increment(ref nextId), document, options) { PieceChars = FirstPieceChars };
         Post(() =>
         {
             if (options.Reader) foreach (var previous in active.Values.Where(r => r.Options.Reader).ToArray()) End(previous);
@@ -95,6 +98,12 @@ public sealed class SpeechService : IDisposable
         return request.Id;
     }
     public void Cancel(long id) => Post(() => { if (queued?.Id == id) { var old = queued; queued = null; CancelPending(old); } foreach (var pending in overlapWaiting.Where(r => r.Id == id).ToArray()) { overlapWaiting.Remove(pending); CancelPending(pending); } if (active.TryGetValue(id, out var r)) End(r); });
+    // Loading a natural SAPI voice takes about half a second; do it before the first Play.
+    public void Prewarm(string voice) => Post(() =>
+    {
+        if (stopping || !voice.StartsWith("sapi:") || sapiPool.Any(p => p.voice == voice) || sapiPool.Count >= 4) return;
+        try { sapiPool.Add((voice, new NativeSapiVoice(voice[5..]))); } catch (Exception) { /* Play reports an unavailable voice itself. */ }
+    });
     public void StopAll() => Post(() => { ClearPending(); foreach (var r in active.Values.ToArray()) End(r); });
     private void CancelPending(Request r) { if (r.Finished) return; r.Finished = true; r.Cancel.Cancel(); Finished?.Invoke(r.Id, r.FullDocument.SourceText); }
     private void ClearPending() { var old = queued; queued = null; if (old != null) CancelPending(old); var waiting = overlapWaiting.ToArray(); overlapWaiting.Clear(); foreach (var r in waiting) CancelPending(r); }
@@ -137,7 +146,7 @@ public sealed class SpeechService : IDisposable
             }
         }
         catch (Exception) { /* Regenerate the mapped suffix if the backend cannot seek. */ }
-        RetirePlayer(r); r.Revision++; r.Sapi?.Cancel(); r.Document = r.FullDocument.FromSource(sourceOffset); r.Timings = []; r.LastWord = -1; r.TimingCursor = -1; r.Paused = paused; r.Started = false; r.SourceOffset = sourceOffset;
+        RetirePlayer(r); r.Revision++; r.Sapi?.Cancel(); r.Next = null; r.PieceChars = FirstPieceChars; r.Document = r.FullDocument.FromSource(sourceOffset); r.Timings = []; r.LastWord = -1; r.TimingCursor = -1; r.Paused = paused; r.Started = false; r.SourceOffset = sourceOffset;
         var synthesisRevision = r.Revision;
         Post(async () => { await Task.Delay(40); if (!r.Cancel.IsCancellationRequested && !stopping && r.Revision == synthesisRevision) StartTracked(r); });
     }
@@ -149,16 +158,25 @@ public sealed class SpeechService : IDisposable
         try
         {
             if (r.Document.SpokenText.Length == 0) { End(r); return; }
-            Preparing?.Invoke(r.Id, r.FullDocument.SourceText); r.PreparingSince = DateTime.UtcNow;
-            var key = $"{r.Options.Voice}\0{r.Options.Rate}\0{r.Options.Volume}\0{r.Document.SpokenText}\0{string.Join(';', r.Document.Pauses.Select(p => $"{p.SpokenOffset}:{p.Milliseconds}"))}";
+            var next = r.Next is { } n && n.Revision == revision && ReferenceEquals(n.From, document) ? n : null; r.Next = null;
+            var piece = next?.Head ?? Head(document, r.PieceChars);
             Audio audio;
-            if (r.Options.Reader && cache?.key == key) { audio = cache.Value.audio; r.Cached = true; }
+            if (next != null) audio = await next.Audio;
             else
             {
-                audio = r.Options.Voice.StartsWith("sapi:") ? await SynthesizeSapi(r, document, revision) : await SynthesizeWinrt(r, document, revision);
-                if (!r.Cancel.IsCancellationRequested && r.Revision == revision && r.Options.Reader && audio.Bytes.Length <= 16 * 1024 * 1024) cache = (key, audio);
+                Preparing?.Invoke(r.Id, r.FullDocument.SourceText);
+                var key = $"{r.Options.Voice}\0{r.Options.Rate}\0{r.Options.Volume}\0{piece.SpokenText}\0{string.Join(';', piece.Pauses.Select(p => $"{p.SpokenOffset}:{p.Milliseconds}"))}";
+                // Only the opening piece is cached, so Read Again still starts instantly.
+                var cacheable = r.Options.Reader && ReferenceEquals(document, r.FullDocument);
+                if (cacheable && cache?.key == key) { audio = cache.Value.audio; r.Cached = true; }
+                else
+                {
+                    audio = await Synthesize(r, piece, revision);
+                    if (!r.Cancel.IsCancellationRequested && r.Revision == revision && cacheable && audio.Bytes.Length <= 16 * 1024 * 1024) cache = (key, audio);
+                }
             }
             if (r.Cancel.IsCancellationRequested || r.Revision != revision || disposed) return;
+            var rest = Rest(document, piece); r.Document = document = piece;
             var stream = new InMemoryRandomAccessStream(); using (var writer = new DataWriter(stream)) { writer.WriteBytes(audio.Bytes); await writer.StoreAsync(); writer.DetachStream(); }
             stream.Seek(0);
             if (r.Cancel.IsCancellationRequested || r.Revision != revision) { stream.Dispose(); return; }
@@ -170,13 +188,21 @@ public sealed class SpeechService : IDisposable
             var player = new MediaPlayer { AutoPlay = false, Volume = 0, IsLoopingEnabled = false }; player.CommandManager.IsEnabled = false;
             r.Player = player; r.RateReady = false;
             player.MediaOpened += (_, _) => Post(() => { if (r.Player != player || r.Cancel.IsCancellationRequested || r.Revision != revision) return; ApplyInitialRate(r); });
-            player.MediaEnded += (_, _) => Post(() => { if (r.Player == player && r.Revision == revision) End(r); });
+            player.MediaEnded += (_, _) => Post(() => { if (r.Player != player || r.Revision != revision) return; if (r.Next is { } following && following.Revision == revision) { RetirePlayer(r); r.Document = following.From; r.Timings = []; r.LastWord = -1; r.TimingCursor = -1; StartTracked(r); } else End(r); });
             player.MediaFailed += (_, e) => Post(() => { if (r.Player == player) { Error?.Invoke("Speech playback failed: " + e.ErrorMessage); End(r); } });
             player.Source = MediaSource.CreateFromStream(r.Stream, "audio/wav");
             r.StartTicks = Environment.TickCount64;
+            if (rest != null)
+            {
+                r.PieceChars = r.PieceChars > int.MaxValue / 2 ? int.MaxValue : r.PieceChars * 2; var head = Head(rest, r.PieceChars); var task = Synthesize(r, head, revision);
+                starting.Add(task); _ = task.ContinueWith(_ => Post(() => starting.Remove(task)), TaskScheduler.Default); r.Next = new(rest, head, task, revision);
+            }
         }
         catch (Exception e) { if (!r.Cancel.IsCancellationRequested && r.Revision == revision) { Error?.Invoke("Speech error: " + e.Message); End(r); } }
     }
+    private Task<Audio> Synthesize(Request r, SpeechDocument document, int revision) => r.Options.Voice.StartsWith("sapi:") ? SynthesizeSapi(r, document, revision) : SynthesizeWinrt(r, document, revision);
+    private static SpeechDocument Head(SpeechDocument document, int chars) { var cut = document.Sentences.FirstOrDefault(s => s.SpokenStart >= chars); return cut == null ? document : document.Until(cut.SpokenStart); }
+    private static SpeechDocument? Rest(SpeechDocument document, SpeechDocument head) => ReferenceEquals(document, head) || head.Words.Count >= document.Words.Count ? null : document.FromSource(document.Words[head.Words.Count].SourceStart);
     private async Task<Audio> SynthesizeWinrt(Request r, SpeechDocument document, int revision)
     {
         var pooled = winrtPool.FindIndex(p => p.voice == r.Options.Voice); var synth = pooled >= 0 ? winrtPool[pooled].synth : new WinSynth(); if (pooled >= 0) winrtPool.RemoveAt(pooled); r.Winrt = synth;

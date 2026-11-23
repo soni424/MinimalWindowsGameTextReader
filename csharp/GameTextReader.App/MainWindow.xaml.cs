@@ -4,7 +4,6 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -72,7 +71,9 @@ public partial class MainWindow : Window
         auto.Status += (message, _) => Ui(() => { AutoStatus.Text = message; AutoButton.Content = auto.Active ? "Stop Auto-Read" : "Start Auto-Read"; DecorateButton(AutoButton, auto.Active ? "stop" : "play"); });
         auto.CancelGrowth += (session, epoch) => Ui(() => { if (auto.IsCurrent(session, epoch) && autoRequest > 0) speech.Cancel(autoRequest); });
         auto.Line += (session, epoch, result) => Ui(() => { if (auto.IsCurrent(session, epoch)) AcceptCapture(result, true); });
-        Loaded += (_, _) => { DecorateButtons(this); UpdateTransport(); };
+        Loaded += (_, _) => { DecorateButtons(this); UpdateTransport(); speech.Prewarm(settings.Voice); };
+        // Load the Markdown and sanitizer libraries in the background so the first paste does not pay their ~3 s start-up.
+        _ = Task.Run(() => { try { const string sample = "# Warm\n\n- **up** [link](https://example.com)\n\n| a | b |\n|---|---|\n| c | d |"; MarkdownService.Render(sample, SpeechText.Prepare(sample, true)); } catch (Exception) { /* Warm-up only; a real render reports its own errors. */ } });
         SourceInitialized += (_, _) => { RestorePhysicalPlacement(); ApplyCaptionTheme(); }; LocationChanged += (_, _) => RememberPhysicalPlacement();
         initializing = false; UpdateTransport();
     }
@@ -433,7 +434,7 @@ public partial class MainWindow : Window
         if (rule == null) return null; if (existing != null) settings.Ocr.Replacements[settings.Ocr.Replacements.IndexOf(existing)] = rule; else settings.Ocr.Replacements.Add(rule); if (!Persist()) return null; Rules.ItemsSource = settings.Ocr.Replacements.ToArray(); return rule;
     }
     private void ShowCorrections(object sender, RoutedEventArgs e) { if (correction is not { } opened) return; var version = revision; Dialogs.Corrections(this, opened, result => { if (correction == null || revision != version) return; if (Editor.Text != result.CorrectedText) { SetText(result.CorrectedText, false); version = revision; } correction = result; UpdateTransport(); }); }
-    private void VoiceChanged(object sender, SelectionChangedEventArgs e) { if (initializing || Voices.SelectedItem is not VoiceInfo voice) return; settings.Voice = voice.Id; Persist(); }
+    private void VoiceChanged(object sender, SelectionChangedEventArgs e) { if (initializing || Voices.SelectedItem is not VoiceInfo voice) return; settings.Voice = voice.Id; Persist(); speech.Prewarm(voice.Id); }
     private void BaseVoiceChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { if (initializing || VolumeLabel == null) return; settings.Rate = (int)BaseSpeed.Value; settings.Volume = Volume.Value; BaseSpeedLabel.Text = "Base speed: " + settings.Rate; VolumeLabel.Text = "Volume: " + (int)settings.Volume; Persist(); }
     private void SpeechModeChanged(object sender, SelectionChangedEventArgs e) { if (initializing) return; settings.Speech.CaptureMode = SpeechMode.SelectedIndex switch { 1 => "queue", 2 => "overlap", _ => "replace" }; settings.Speech.MaxOverlap = MaxOverlap.SelectedItem is int n ? n : 2; if (Persist()) speech.StopAll(); }
     private void TestVoice(object sender, RoutedEventArgs e) => speech.Submit(SpeechText.Prepare("This is a preview of the selected voice."), SpeechOptionsFor(false, true));

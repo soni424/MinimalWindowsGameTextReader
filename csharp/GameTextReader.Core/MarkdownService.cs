@@ -17,10 +17,10 @@ public static class MarkdownService
     public static MarkdownPreview Render(string source, SpeechDocument speech)
     {
         // Raw image tags do not bypass consent, and removed blocks must not execute or narrate.
-        var safeSource = Regex.Replace(source, @"<(script|style|iframe|object|form)\b[^>]*>.*?</\1\s*>", m => Regex.Replace(m.Value, @"[^\r\n]", " "), RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var safeSource = SpeechText.MaskUnsafeBlocks(source);
         safeSource = Regex.Replace(safeSource, @"<(?:input|img)\b[^>]*>", m => new string(' ', m.Length), RegexOptions.IgnoreCase);
         var document = Markdown.Parse(safeSource, Pipeline); var images = new List<string>(); using var output = new StringWriter(); var renderer = new HtmlRenderer(output); Pipeline.Setup(renderer);
-        renderer.ObjectRenderers.Insert(0, new LiteralRenderer(speech)); renderer.ObjectRenderers.Insert(0, new LinkRenderer(images)); renderer.ObjectRenderers.Insert(0, new SourceListRenderer(source, speech)); renderer.ObjectRenderers.Insert(0, new RawHtmlRenderer(safeSource, speech)); renderer.ObjectRenderers.Insert(0, new MathInlineRenderer()); renderer.ObjectRenderers.Insert(0, new MathBlockRenderer());
+        var words = new WordLookup(speech.Words); renderer.ObjectRenderers.Insert(0, new LiteralRenderer(words)); renderer.ObjectRenderers.Insert(0, new LinkRenderer(images)); renderer.ObjectRenderers.Insert(0, new SourceListRenderer(source, words)); renderer.ObjectRenderers.Insert(0, new RawHtmlRenderer(safeSource, words)); renderer.ObjectRenderers.Insert(0, new MathInlineRenderer()); renderer.ObjectRenderers.Insert(0, new MathBlockRenderer());
         renderer.Render(document);
         var sanitizer = new HtmlSanitizer { KeepChildNodes = true }; sanitizer.AllowedTags.Clear(); sanitizer.AllowedAttributes.Clear(); sanitizer.AllowedCssProperties.Clear(); sanitizer.AllowedSchemes.Clear();
         foreach (var tag in "p br h1 h2 h3 h4 h5 h6 strong em del s blockquote ul ol li input table thead tbody tr th td pre code hr a span div sup sub section details summary kbd".Split(' ')) sanitizer.AllowedTags.Add(tag);
@@ -28,7 +28,7 @@ public static class MarkdownService
         foreach (var scheme in new[] { "https", "http", "mailto" }) sanitizer.AllowedSchemes.Add(scheme);
         return new(sanitizer.Sanitize(output.ToString()), images);
     }
-    private sealed class LiteralRenderer(SpeechDocument speech) : HtmlObjectRenderer<LiteralInline>
+    private sealed class LiteralRenderer(WordLookup words) : HtmlObjectRenderer<LiteralInline>
     {
         protected override void Write(HtmlRenderer renderer, LiteralInline obj)
         {
@@ -36,7 +36,7 @@ public static class MarkdownService
             foreach (Match m in SpeechText.WordPattern.Matches(text))
             {
                 renderer.WriteEscape(text[cursor..m.Index]); int sourceStart = obj.Span.Start + m.Index + (obj.IsFirstCharacterEscaped ? 1 : 0);
-                int index = speech.Words.ToList().FindIndex(w => w.SourceStart <= sourceStart && w.SourceEnd > sourceStart || w.SourceStart >= sourceStart && w.SourceStart < sourceStart + m.Length);
+                int index = words.Overlapping(sourceStart, m.Length);
                 if (index >= 0) renderer.Write($"<span data-reader-word-index=\"{index}\">"); renderer.WriteEscape(m.Value); if (index >= 0) renderer.Write("</span>"); cursor = m.Index + m.Length;
             }
             renderer.WriteEscape(text[cursor..]);
@@ -57,7 +57,9 @@ public static class MarkdownService
             renderer.Write("<a href=\""); renderer.WriteEscape(url); renderer.Write("\">"); renderer.WriteChildren(obj); renderer.Write("</a>");
         }
     }
-    private sealed class SourceListRenderer(string source, SpeechDocument speech) : HtmlObjectRenderer<ListBlock>
+    // Matched in place at the line start; copying the rest of the document per list item was quadratic.
+    private static readonly Regex OrderedMarker = new(@"\G\s*(\d{1,3})[.)]\s+");
+    private sealed class SourceListRenderer(string source, WordLookup words) : HtmlObjectRenderer<ListBlock>
     {
         protected override void Write(HtmlRenderer renderer, ListBlock list)
         {
@@ -68,8 +70,8 @@ public static class MarkdownService
                 if (list.IsOrdered)
                 {
                     var lineStart = obj.Span.Start <= 0 ? 0 : source.LastIndexOf('\n', Math.Min(obj.Span.Start - 1, source.Length - 1)) + 1;
-                    var match = Regex.Match(source[lineStart..], @"^\s*(\d{1,3})[.)]\s+");
-                    if (match.Success) { int offset = lineStart + match.Groups[1].Index; var index = speech.Words.ToList().FindIndex(w => w.SourceStart == offset); renderer.Write($"<span class=\"ordered-marker\" data-reader-word-index=\"{index}\">{match.Groups[1].Value}.</span> "); }
+                    var match = OrderedMarker.Match(source, lineStart);
+                    if (match.Success) { int offset = match.Groups[1].Index; var index = words.StartingAt(offset); renderer.Write($"<span class=\"ordered-marker\" data-reader-word-index=\"{index}\">{match.Groups[1].Value}.</span> "); }
                 }
                 var previous = renderer.ImplicitParagraph;
                 renderer.ImplicitParagraph = !list.IsLoose;
@@ -79,7 +81,7 @@ public static class MarkdownService
             renderer.WriteLine(list.IsOrdered ? "</ol>" : "</ul>");
         }
     }
-    private sealed class RawHtmlRenderer(string source, SpeechDocument speech) : HtmlObjectRenderer<HtmlBlock>
+    private sealed class RawHtmlRenderer(string source, WordLookup words) : HtmlObjectRenderer<HtmlBlock>
     {
         protected override void Write(HtmlRenderer renderer, HtmlBlock obj)
         {
@@ -89,11 +91,31 @@ public static class MarkdownService
                 if (part.Value.StartsWith('<') || part.Value.StartsWith('&')) { renderer.Write(part.Value); continue; }
                 int cursor = 0; foreach (Match word in SpeechText.WordPattern.Matches(part.Value))
                 {
-                    renderer.WriteEscape(part.Value[cursor..word.Index]); int offset = start + part.Index + word.Index; var index = speech.Words.ToList().FindIndex(w => w.SourceStart == offset);
+                    renderer.WriteEscape(part.Value[cursor..word.Index]); int offset = start + part.Index + word.Index; var index = words.StartingAt(offset);
                     if (index >= 0) renderer.Write($"<span data-reader-word-index=\"{index}\">"); renderer.WriteEscape(word.Value); if (index >= 0) renderer.Write("</span>"); cursor = word.Index + word.Length;
                 }
                 renderer.WriteEscape(part.Value[cursor..]);
             }
+        }
+    }
+    // Indexed once per render; a linear scan per word made long documents quadratic.
+    private sealed class WordLookup
+    {
+        private readonly IReadOnlyList<SpeechWord> words; private readonly Dictionary<int, int> starts = []; private readonly bool sorted = true;
+        public WordLookup(IReadOnlyList<SpeechWord> words)
+        {
+            this.words = words;
+            for (int i = 0; i < words.Count; i++) { starts.TryAdd(words[i].SourceStart, i); if (i > 0 && (words[i].SourceStart < words[i - 1].SourceStart || words[i].SourceEnd < words[i - 1].SourceEnd)) sorted = false; }
+        }
+        public int StartingAt(int offset) => starts.TryGetValue(offset, out var index) ? index : -1;
+        // First word that overlaps [start, start + length), or that contains start.
+        public int Overlapping(int start, int length)
+        {
+            bool Hit(SpeechWord w) => w.SourceStart <= start && w.SourceEnd > start || w.SourceStart >= start && w.SourceStart < start + length;
+            if (!sorted) { for (int i = 0; i < words.Count; i++) if (Hit(words[i])) return i; return -1; }
+            int low = 0, high = words.Count;
+            while (low < high) { var middle = low + (high - low) / 2; if (words[middle].SourceEnd <= start) low = middle + 1; else high = middle; }
+            return low < words.Count && Hit(words[low]) ? low : -1;
         }
     }
     private sealed class MathInlineRenderer : HtmlObjectRenderer<MathInline>

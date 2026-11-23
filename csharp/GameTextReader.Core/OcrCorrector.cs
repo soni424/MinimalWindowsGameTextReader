@@ -24,14 +24,14 @@ public sealed class OcrCorrector
     public void Preload() => _ = dictionaries.Value;
     private static (SymSpell, Dictionary<string, long>, Dictionary<string, long>) Load(string folder)
     {
-        var words = new Dictionary<string, long>(); var bigrams = new Dictionary<string, long>();
+        var words = new Dictionary<string, long>();
         var wordPath = Path.Combine(folder, "frequency_dictionary_en_82_765.txt"); var bigramPath = Path.Combine(folder, "frequency_bigramdictionary_en_243_342.txt");
         var engine = new SymSpell(82765, 2, 7);
         if (!engine.LoadDictionary(wordPath, 0, 1)) throw new IOException("The bundled OCR dictionary is missing.");
         engine.LoadBigramDictionary(bigramPath, 0, 2);
         foreach (var line in File.ReadLines(wordPath)) { var cut = line.LastIndexOf(' '); if (cut > 0 && long.TryParse(line[(cut + 1)..], out var n)) words[line[..cut]] = n; }
-        foreach (var line in File.ReadLines(bigramPath)) { var cut = line.LastIndexOf(' '); if (cut > 0 && long.TryParse(line[(cut + 1)..], out var n)) bigrams[line[..cut]] = n; }
-        return (engine, words, bigrams);
+        // SymSpell keeps the parsed word pairs itself (verified identical); a second copy re-read 5 MB into ~240k more strings.
+        return (engine, words, engine.bigrams);
     }
     private static readonly (string pattern, string replacement)[] Grammar =
     [

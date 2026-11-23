@@ -16,6 +16,12 @@ public sealed record SpeechDocument(string SourceText, string SpokenText, IReadO
         var shift = word.SpokenStart; var words = Words.Where(w => w.SpokenStart >= shift).Select(w => w with { SpokenStart = w.SpokenStart - shift, SpokenEnd = w.SpokenEnd - shift }).ToArray();
         return new(SourceText, SpokenText[shift..], words, SpeechText.Sentences(SpokenText[shift..], words), Pauses.Where(p => p.SpokenOffset > shift).Select(p => p with { SpokenOffset = p.SpokenOffset - shift }).ToArray());
     }
+    public SpeechDocument Until(int spokenEnd)
+    {
+        if (spokenEnd >= SpokenText.Length) return this;
+        var words = Words.Where(w => w.SpokenEnd <= spokenEnd).ToArray();
+        return new(SourceText, SpokenText[..spokenEnd], words, SpeechText.Sentences(SpokenText[..spokenEnd], words), Pauses.Where(p => p.SpokenOffset < spokenEnd).ToArray());
+    }
 }
 public sealed record SynthesisInput(string Text, int[] NativeToSpoken, bool Structured);
 public static class SpeechText
@@ -26,6 +32,7 @@ public static class SpeechText
     private static readonly Regex Heading = new(@"^\s{0,3}#{1,6}\s+");
     private static readonly Regex Rule = new(@"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$");
     private static readonly Regex TrailingPause = new("[.,!?…;:][\"'”’\\])}]*$");
+    private static readonly Regex Entity = new(@"\G&(?:#\d+|#x[0-9a-fA-F]+|[A-Za-z]+);");
     private static readonly HashSet<string> Abbreviations = ["mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc"];
     // "live" is respelled for the voice unless nearby words show the real-time sense ("laiv").
     // shortcut: fixed word lists, not grammar parsing, so "all you can do is live" stays "laiv"; add cues as misreads are reported.
@@ -33,6 +40,9 @@ public static class SpeechText
     private const string RealTimeAfter = @"\s+(?:streams?|streaming|broadcasts?|shows?|music|concerts?|events?|audience|tv|television|radio|feeds?|news|coverage|action|performances?|band|album|recordings?|ammo|ammunition|rounds?|wires?|bait|animals?|chats?|updates?|demos?|data|match|matches|games?|sessions?|fire|grenades?|footage|videos?|commentary)\b|\s+on\s+(?:the\s+)?(?:air|stage|tv|television|camera|radio|twitch|youtube)\b|\s+in\s+(?:concert|studio)\b|\s+from\b(?!\s+(?:hand|day|week|paycheck|now|then)\b)";
     private const string GoLive = @"(?:(?<!\b(?:go|goes|going|went|gone)\s+)|(?=live\s+(?:with|there|here|alone|together|in\s+(?:the|a|an|my|your|his|her|our|their|this|that|peace))\b))";
     private static readonly Regex VerbLive = new($@"(?<![\w\-])(?<!{RealTimeBefore}){GoLive}live(?![\w\-]|['’]\w)(?!{RealTimeAfter})", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex UnsafeBlock = new(@"<(script|style|iframe|object|form)\b[^>]*>.*?</\1\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    // Blanks script/style-like blocks, keeping line breaks and offsets, so they are neither narrated nor rendered.
+    internal static string MaskUnsafeBlocks(string source) => UnsafeBlock.Replace(source, m => Regex.Replace(m.Value, @"[^\r\n]", " "));
     public static bool LooksLikeMarkdown(string text) => Regex.IsMatch(text, @"(?m)^\s{0,3}(?:#{1,6}\s|>\s|[-+*]\s|\d+[.)]\s|\|.+\|\s*$)|\*\*[^*]+\*\*|\[[^]]+\]\([^)]+\)|```|\$\$|\[\^[^]]+\]:");
     public static string Cardinal(int value)
     {
@@ -43,7 +53,7 @@ public static class SpeechText
     public static SpeechDocument Prepare(string source, bool markdown = false)
     {
         source ??= ""; var output = new StringBuilder(); var origins = new List<int>(); var segment = new List<(char c, int origin)>();
-        var masked = markdown ? Regex.Replace(source, @"<(script|style|iframe|object|form)\b[^>]*>.*?</\1\s*>", m => Regex.Replace(m.Value, @"[^\r\n]", " "), RegexOptions.IgnoreCase | RegexOptions.Singleline) : source;
+        var masked = markdown ? MaskUnsafeBlocks(source) : source;
         void Flush()
         {
             if (segment.Count == 0) return;
@@ -55,7 +65,8 @@ public static class SpeechText
                 if (output.Length > 0 && output[^1] != ' ' && !Regex.IsMatch(token.Value, @"^[.,!?…;:]+$")) { output.Append(' '); origins.Add(-1); }
                 foreach (var pair in segment.Skip(token.Index).Take(token.Length)) { output.Append(pair.c); origins.Add(pair.origin); }
             }
-            if (!TrailingPause.IsMatch(output.ToString())) { output.Append('.'); origins.Add(-1); }
+            // Only the tail can end in a pause; copying the whole output here made long pastes quadratic.
+            if (!TrailingPause.IsMatch(output.ToString(Math.Max(0, output.Length - 64), Math.Min(64, output.Length)))) { output.Append('.'); origins.Add(-1); }
             segment.Clear();
         }
         var cursor = 0; bool fence = false, math = false;
@@ -98,12 +109,13 @@ public static class SpeechText
         var result = new List<(char, int)>(); int i = 0;
         while (i < line.Length)
         {
-            var part = line[i..];
+            // A span, not a substring: copying the rest of the line per character made long lines quadratic.
+            var part = line.AsSpan(i);
             if (part.StartsWith("<!--")) { var end = line.IndexOf("-->", i + 4, StringComparison.Ordinal); i = end < 0 ? line.Length : end + 3; continue; }
             if (line[i] == '<') { var end = line.IndexOf('>', i + 1); if (end >= 0) { if (Regex.IsMatch(line[i..(end + 1)], @"^</?(?:details|summary|p|br|div|li|td|th|blockquote)\b", RegexOptions.IgnoreCase) && result.Count > 0 && !char.IsWhiteSpace(result[^1].Item1)) result.Add((' ', offset + i)); i = end + 1; continue; } }
             if (line[i] == '`') { int count = 1; while (i + count < line.Length && line[i + count] == '`') count++; var end = line.IndexOf(new string('`', count), i + count, StringComparison.Ordinal); if (end >= 0) { i = end + count; continue; } }
             if (line[i] == '$') { var end = line.IndexOf('$', i + 1); if (end >= 0) { i = end + 1; continue; } }
-            if (line[i] == '&') { var entity = Regex.Match(part, @"^&(?:#\d+|#x[0-9a-fA-F]+|[A-Za-z]+);"); if (entity.Success) { foreach (var c in WebUtility.HtmlDecode(entity.Value)) result.Add((c, offset + i)); i += entity.Length; continue; } }
+            if (line[i] == '&') { var entity = Entity.Match(line, i); if (entity.Success) { foreach (var c in WebUtility.HtmlDecode(entity.Value)) result.Add((c, offset + i)); i += entity.Length; continue; } }
             if (part.StartsWith("![") || part.StartsWith('['))
             {
                 var start = i + (part.StartsWith("![") ? 2 : 1); var end = line.IndexOf(']', start);

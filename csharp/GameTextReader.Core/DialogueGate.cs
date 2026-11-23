@@ -54,10 +54,4 @@ public sealed class DialogueGate
         if ((value.Count(char.IsLetterOrDigit) < 2 || Similar(LastSpoken, value)) && Confirmations < 2) return DialogueDecision.Ignore;
         LastSpoken = value; return DialogueDecision.Speak;
     }
-    public static int EditDistance(string a, string b)
-    {
-        var previous = Enumerable.Range(0, b.Length + 1).ToArray();
-        for (int i = 1; i <= a.Length; i++) { var current = new int[b.Length + 1]; current[0] = i; for (int j = 1; j <= b.Length; j++) current[j] = Math.Min(Math.Min(previous[j] + 1, current[j - 1] + 1), previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)); previous = current; }
-        return previous[^1];
-    }
 }

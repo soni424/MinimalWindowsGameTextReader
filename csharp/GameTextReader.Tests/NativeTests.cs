@@ -89,7 +89,7 @@ public class NativeTests
         var saved = File.Exists(ConfigStore.DefaultPath) ? SettingsCodec.Read(File.ReadAllText(ConfigStore.DefaultPath)).Voice : "";
         var voice = voices.FirstOrDefault(v => v.Backend == backend && v.Id == saved) ?? voices.First(v => v.Backend == backend);
         var source = "# " + (supplementaryUnicode ? "🌱 " : "") + "Science & evidence\n\n1. **Observation:** Notice repeated words repeated words.\n2. **Question:** Why do plants grow?\n\n- **Evidence:** Keep science clear.\n- **Results:** Check each conclusion.\n\nFinal paragraph follows.";
-        var document = SpeechText.Prepare(source, true); using var speech = new SpeechService();
+        var document = SpeechText.Prepare(source, true); using var speech = new SpeechService { FirstPieceChars = int.MaxValue };
         var traced = new TaskCompletionSource<(SynthesisInput input, IReadOnlyList<SpeechService.Timing> raw)>(TaskCreationOptions.RunContinuationsAsynchronously);
         speech.BoundaryTrace += (_, input, timings) => traced.TrySetResult((input, timings));
         var events = new System.Collections.Concurrent.ConcurrentQueue<SpeechProgress>(); speech.Progress += events.Enqueue;

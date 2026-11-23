@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Drawing;
 using GameTextReader.Core;
 
 namespace GameTextReader.Windows;

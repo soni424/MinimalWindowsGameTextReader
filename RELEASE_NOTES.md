@@ -1,5 +1,13 @@
 # Game Text Reader 2.0.0-dev — C# development port
 
+## Faster start
+
+- Play starts after the first sentence is synthesized instead of the whole document; later sentences are synthesized while earlier ones play. With Microsoft Aria (Natural) a 7 KB document now starts in about 1 s instead of 17 s, and longer documents no longer wait longer. Pieces join at sentence ends with about 0.1 s of extra silence.
+- The selected voice is loaded at startup and when changed, so the first Play does not wait for it.
+- Very long Markdown lines prepare in linear time (an 80,000-character line: 2.9 s → under 0.1 s), and long numbered lists no longer slow the preview.
+- The OCR word-pair dictionary is loaded once instead of twice, using about 15 MB less memory. Unused code and imports were removed.
+- Large Markdown pastes prepare about twice as fast, and the first Markdown paste after launch no longer waits about 3 s for the preview libraries to load.
+
 ## Pronunciation
 
 - "live" is now spoken as "liv" (to exist) unless nearby words show the real-time sense ("laiv"), as in "we are live" or "live stream". The displayed text, copied text and word highlighting are unchanged.
